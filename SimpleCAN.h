@@ -41,10 +41,11 @@
 
 enum SCCanSpeed
 {
+	CUSTOM = 0,
 	Mbit1 = 10,
 	Kbit500 = 20,
 	Kbit250 = 40,
-	Kbit125 = 80	
+	Kbit125 = 80,
 };
 
 

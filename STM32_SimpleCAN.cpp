@@ -45,12 +45,13 @@
 
 
 #include <Arduino.h>
-#include "ThreadSafeQueue.h"
-#include "SimpleCAN.h"
+#include <ThreadSafeQueue.h>
+#include <STM32_SimpleCAN.h>
 
 // #define STM32G4xx
 
 #if defined(STM32G4xx)
+
 
 #ifdef Error_Handler
 #undef Error_Handler
@@ -101,80 +102,6 @@ SCCanStatus SC2STM32_Filter(FilterDefinition *SCFilter, FDCAN_FilterTypeDef*  ST
 	}
 	return CAN_OK;
 }
-
-
-class RxHandlerSTM32 : public RxHandlerBase
-{
-	public:
-		// Note: The constructor here is a must in order to initialize the base class. 
-		RxHandlerSTM32(uint16_t dataLength) : RxHandlerBase(dataLength) {};
-		bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen);		
- 		void ReleaseRcvBuffer();		
-
-	private:
-		FDCAN_RxHeaderTypeDef _rxHeader;
-};
-
-
-class SimpleCan_STM32G4xx : public SimpleCan
-{
-	public:
-		SimpleCan_STM32G4xx(uint32_t PinTx, uint32_t PinRx);
-
-		//*******************************************************
-		//*** Implementation of pure virtual methods ************
-		
-		// Initialize the CAN controller
-		SCCanStatus Init(SCCanSpeed speed, CanIDFilter IDFilterFunc=0);
-
-		// Register/deregister a callback function for message received events.
-		// The notification handler is platform specific, that is why it's needed here.
-		// These functions may be overloaded if required.
-		SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData);
-		SCCanStatus DeactivateNotification();
-
-		// Set bus termination on/off (may not be available on all platforms).
-		// Default is on.
-		SCCanStatus SetBusTermination(bool On);
-
-		// Start and stop all activities. Changing acceptance filters requires stop()
-		// before doing so on some platforms.
-		SCCanStatus Start();
-		SCCanStatus Stop();
-
-		// Modify the global filter to reject everything which is not matching the other filters and to accept all remote frames. 
-		SCCanStatus ConfigGlobalFilter();
-
-		// Modify the acceptance filter. This may be forbidden while the controller is active.
-		SCCanStatus ConfigFilter(FilterDefinition *filterDef);
-
-		// Start sending messages from the queue to the CAN bus, until the TX queue is emty.
-		bool TriggerSending() { return SendNextMessageFromQueue();};
-
-
-		//*******************************************************
-		//*** Other methods ************
-
-		static bool SendNextMessageFromQueue();
-
-		// Sending an RTR frame is exactly the same as SendMessage(), except for setting the RTR bit in the header
-		// and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
-		// return payload. The answer to the RTR frame will be received and handled like any other CAN message.
-		// bool RequestMessage(int NumBytes, int CanID, bool UseEFF=false);
-		static bool SendRequestMessage(int NumBytes, int CanID, bool UseEFF);
-
-		SCCanStatus ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt);
-		SCCanStatus AddMessageToTxFifoQ(FDCAN_TxHeaderTypeDef *pTxHeader, uint8_t *pTxData);
-		bool Loop();
-
-		static FDCAN_HandleTypeDef _hfdcan1;
-		uint8_t TxData[8];
-
-		static RxHandlerSTM32 *RxHandlerP;		
-
-	private:
-		static CanIDFilter SendIDFilterFunc;
-};
 
 
 CanIDFilter SimpleCan_STM32G4xx::SendIDFilterFunc;
@@ -294,7 +221,7 @@ SCCanStatus SimpleCan_STM32G4xx::Stop(void)
 
 SCCanStatus SimpleCan_STM32G4xx::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc)
 {
-	Serial.println("SimpleCan_STM32G4xx::Init()"); delay(200);
+	Serial.println("SimpleCan_STM32G4xx::Init()");
 
 	if (IDFilterFunc) SendIDFilterFunc = IDFilterFunc;
 
@@ -311,19 +238,22 @@ SCCanStatus SimpleCan_STM32G4xx::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc
 	// see: http://www.bittiming.can-wiki.info/
 	// 170MHz / Prescaler / SyncJumpWith / (TimeSeg1 + TimeSeg2 + SyncSeg) 
 	// SyncSeg = SYNC_SEG = 1, TimeSeg1 = PROP_SEG + PHASE_SEG1, TimeSeg2 = PHASE_SEG2
-	init->NominalPrescaler = (uint16_t) speed;
-	init->NominalSyncJumpWidth = 1;
-	init->NominalTimeSeg1 = 14;
-	init->NominalTimeSeg2 = 2;
+	if (speed != 0)
+	{
+		init->NominalPrescaler = (uint16_t) speed;
+		init->NominalSyncJumpWidth = 1;
+		init->NominalTimeSeg1 = 14;
+		init->NominalTimeSeg2 = 2;
 
-	init->DataPrescaler = 1;
-	init->DataSyncJumpWidth = 4;
-	init->DataTimeSeg1 = 5;
-	init->DataTimeSeg2 = 4;
+		init->DataPrescaler = 1;
+		init->DataSyncJumpWidth = 4;
+		init->DataTimeSeg1 = 5;
+		init->DataTimeSeg2 = 4;
+	}
 	init->StdFiltersNbr = 1;
 	init->ExtFiltersNbr = 1;
 	init->TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
-	
+
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_Init(&_hfdcan1));
 }
 
@@ -406,7 +336,7 @@ void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 	HAL_RCCEx_GetPeriphCLKConfig(&periphClkInit);
 	
 	// Initializes the peripherals clocks
-	periphClkInit.PeriphClockSelection |= RCC_PERIPHCLK_FDCAN;
+	periphClkInit.PeriphClockSelection = RCC_PERIPHCLK_FDCAN;
 	periphClkInit.FdcanClockSelection = RCC_FDCANCLKSOURCE_PCLK1;
 	if (HAL_RCCEx_PeriphCLKConfig(&periphClkInit) != HAL_OK)
 	{
