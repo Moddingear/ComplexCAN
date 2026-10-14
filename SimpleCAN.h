@@ -24,9 +24,6 @@
 #pragma once
 #include "Arduino.h"
 
-#define RX_QUEUE_SIZE	16
-#define TX_QUEUE_SIZE	16
-
 #if !defined STM32G4xx && !defined ESP32
 	// Depending on the board you compile this for, one of the above defines must be defined.
 	// Typically, these are predefined by the Arduino/platformio environment.
@@ -56,25 +53,6 @@ enum SCCanStatus
   CAN_BUSY     = 0x02U,
   CAN_TIMEOUT  = 0x03U,
   CAN_UNSUPPORTED = 0x04U
-};
-
-enum SCIdType
-{
-	CAN_STDID = 0,
-	CAN_EXTID = 1
-};
-
-enum SCCanType
-{
-	CAN_CLASSIC	= 0,
-	CAN_FDFCAN	= 1
-};
-
-
-enum SCFrameType
-{
-	CAN_DATA_FRAME		= 0,
-	CAN_REMOTE_FRAME	= 1
 };
 
 
@@ -117,7 +95,7 @@ class FilterDefinition
 		SCFilterConfig FilterConfig;     /*!< Specifies the filter configuration (STM32).
 										This parameter can be a value of @ref FDCAN_filter_config */
 
-		SCIdType IdType;           		// SCIdType: Specifies the identifier type of the received message (standard / extended)
+		bool ExtendedID;           		// SCIdType: Specifies the identifier type of the received message (standard / extended)
 		uint32_t FilterID1;        		// Specifies the filter identification 1. 
 										// (11 Bits for Std frame, ESP32 could use 16. For ext frames 29 bits. Only the IDs are compared.)
 		uint32_t FilterID2;       		// Specifies the filter identification 2 or mask.
@@ -127,78 +105,42 @@ class FilterDefinition
 
 // Class with information on the received CAN header.
 // This is passed on to the callback function whenever a message is received.
-class SimpleCanRxHeader
+struct SimpleCanRxHeader
 {
-	public:
-		uint32_t Identifier;            // Specifies the identifier.
+	uint32_t Identifier:29;			// Specifies the identifier.
+	bool ExtendedID :1;				// SCIdType: Specifies the identifier type of the received message (standard / extended)
+	bool RemoteFrame :1;			// SCFrameType: data frame / remote frame
+	bool FDCANFrame :1;				// SCCanType: Classic CAN / FDCAN frame
 
-		SCIdType IdType;                // SCIdType: Specifies the identifier type of the received message (standard / extended)
-	
-		uint32_t RxFrameType;           // SCFrameType: data frame / remote frame
+	uint8_t DataLength;				// Specifies the received payload length in bytes.
 
-		uint32_t DataLength;            // Specifies the received payload length in bytes.
+	uint8_t FilterIndex :4;			// Specifies the index of matching Rx acceptance filter element. -1 if unsupported.
+	uint8_t IsFilterMatchingFrame :2; 	// Specifies whether the accepted frame did not match any Rx filter.
+									//	Acceptance of non-matching frames may be enabled via
+									//	HAL_FDCAN_ConfigGlobalFilter().
+									// 	0=No match, 1=match, -1 unsupported
 
-		uint32_t Format;              	// SCCanType: Classic CAN / FDCAN frame
+	int32_t RxTimestamp;           	// Specifies the timestamp counter value captured on start of frame reception [0 .. 0xFFFF]. -1 if unsupported.
 
-		int32_t RxTimestamp;           	// Specifies the timestamp counter value captured on start of frame reception [0 .. 0xFFFF]. -1 if unsupported.
-
-		int32_t FilterIndex;           	// Specifies the index of matching Rx acceptance filter element. -1 if unsupported.
-
-		int32_t IsFilterMatchingFrame; 	// Specifies whether the accepted frame did not match any Rx filter.
-										//	Acceptance of non-matching frames may be enabled via
-										//	HAL_FDCAN_ConfigGlobalFilter().
-										// 	0=No match, 1=match, -1 unsupported	
 };
 
 
 
-class CANTxMessage
+struct CanTxMessage
 {
-	public:
-		int CanID;
-		uint8_t Data[8];
-		int Size;
-		bool EFF;
-		bool RTR;
+	uint32_t Identifier:29;
+	bool ExtendedID:1;
+	bool RemoteFrame:1;
+	bool FDCanFrame:1;
+	uint8_t Size;
 };
 
 
-class CanRxMessage
+struct CanRxMessage
 {
-	public:
-		CanRxMessage() : Error(false) {};
-		SimpleCanRxHeader SCHeader;
-		uint8_t Data[8];
-		uint8_t Error;
-};
-
-
-
-//--------------------------------------------------------------------------------------
-// A simpke helper since digoitalToggle() was not available on the ESP32S3.
-class ToggleLED
-{
-	public:
-		ToggleLED() {LEDState=false;};
-
-		void SetPin(uint8_t PinNum)
-		{
-			LEDPinNum = PinNum;
-			pinMode(PinNum, OUTPUT);
-		};
-
-		void Toggle()
-		{
-			if (LEDState)
-				digitalWrite(LEDPinNum, 0);
-			else
-				digitalWrite(LEDPinNum, 1);
-			LEDState = !LEDState;
-		};
-
-	private:
-		bool LEDState;
-		uint8_t LEDPinNum;
+	SimpleCanRxHeader SCHeader;
+	//uint8_t Data[8];
+	uint8_t Error = false;
 };
 
 
@@ -221,21 +163,19 @@ class RxHandlerBase
 		RxHandlerBase(uint16_t dataLength);
 		~RxHandlerBase();
 		void SetProfileCallback(uint16_t dataLength, RxCallback callback, void* userData);
-		void Notify(/*FDCAN_HandleTypeDef *hfdcan*/);		// Platform dependent!
+
+		// This function is called by the actual low level ISR when a new frame is received.
+		// ISR, absolutely no printing to serial!!
+		virtual void Notify();		// Platform dependent!
 		RxCallback ProfileCallback;
 		void* ProfileClass;		// Pointer available for callback routine to do with it whatever it likes.
 
 		// Called for every frame which was received from the CAN bus. 
-		virtual bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)=0;
+		virtual bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen) = 0;
 
 		// Called whenever a frame was read and CANReadFrame() finished or the frame can be discarded otherwise.
 		// Used to signal the hardware that the frame data are not required anymore.
 		virtual void ReleaseRcvBuffer()=0;
-
-		// Called whenever there is activity detected on the CAN bus (frames received / transmitted).
-		// The default implementation just blinks a LED if enabled, but may be overloaded by a board specific version.
-		// Note: This may be before filtering! 
-		virtual void CANBusACtivityDetected();
 		
 		bool Loop();
 
@@ -266,10 +206,6 @@ class SimpleCan
 		virtual SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)=0;
 		virtual SCCanStatus DeactivateNotification()=0;
 
-		// Set bus termination on/off (may not be available on all platforms).
-		// Default is on.
-		virtual SCCanStatus SetBusTermination(bool On)=0;
-
 		// Start and stop all activities. Changing acceptance filters requires stop()
 		// before doing so on some platforms.
 		virtual SCCanStatus Start()=0;
@@ -291,14 +227,14 @@ class SimpleCan
 		// Send a message to the TX FIFO and trigger sending to CAN bus.
 		// If UseEFF is set, extended frame format will be used, standard frame format otherwise.
 		// Returns true on success.
-		virtual bool SendMessage(const uint8_t* pData, int NumBytes, int CanID, bool UseEFF=false);
+		virtual bool SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF=false, bool UseFDCAN = false);
 
 
 		// Send an RTR frame to TX Fifo and trigger sending to CAN bus
 		// Sending an RTR frame is exactly the same as SendMessage(), except for setting the RTR bit in the header
 		// and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
 		// return payload. The answer to the RTR frame will be received and handled like any other CAN message.
-		virtual bool RequestMessage(int NumBytes, int CanID, bool UseEFF=false);
+		virtual bool RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF=false, bool UseFDCAN = false);
 
 		// Set a filter to accept all incoming messages
 		virtual SCCanStatus AcceptAllMessages(); 
@@ -329,15 +265,9 @@ class SimpleCan
 		void DisableRx() {DoNotReceive=true;};
 		void EnableRx () {DoNotReceive=false;};
 
-		// Enable/Disable blinking on CAN bus activity.
-		void DisableBlinkOnActivity();
-		void EnableBlinkOnActivity (uint8_t LEDPinNum);
-
-		static SafeQueue<CanRxMessage> RxQueue;
-		static SafeQueue<CANTxMessage> TxQueue;
-		static bool BlinkOnActivity;
-		static ToggleLED LED;
-
+		static uint8_t rx_overrun;
+		static CircularBuffer<CanRxMessage, 1024, 64> RxQueue;
+		static CircularBuffer<CanTxMessage, 1024, 64> TxQueue;
 	private:
 		bool DoNotSend;
 		bool DoNotReceive;

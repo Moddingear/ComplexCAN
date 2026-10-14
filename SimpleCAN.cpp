@@ -7,14 +7,11 @@
 */
 
 #include <Arduino.h>
-#include "SimpleCAN.h"
+#include <SimpleCAN.h>
 
-
-SafeQueue<CanRxMessage> SimpleCan::RxQueue(RX_QUEUE_SIZE);
-SafeQueue<CANTxMessage> SimpleCan::TxQueue(TX_QUEUE_SIZE);
-bool SimpleCan::BlinkOnActivity=false;
-ToggleLED SimpleCan::LED;
-
+uint8_t SimpleCan::rx_overrun = 0;
+CircularBuffer<CanRxMessage, 1024, 64> SimpleCan::RxQueue;
+CircularBuffer<CanTxMessage, 1024, 64> SimpleCan::TxQueue;
 
 
 // Set a filter to accept all incoming messages
@@ -23,7 +20,7 @@ SCCanStatus SimpleCan::AcceptAllMessages()
 	SCCanStatus rc=CAN_OK;
 	// Configure Rx filter
 	FilterDefinition FilterConfig;
-	FilterConfig.IdType = CAN_STDID;
+	FilterConfig.ExtendedID = false;
 	FilterConfig.FilterIndex = 0;
 	FilterConfig.FilterType = CAN_FILTER_MASK;
 	FilterConfig.FilterConfig = CAN_FILTER_TO_RXFIFO0;
@@ -39,7 +36,7 @@ SCCanStatus SimpleCan::DenyAllMessages()
 	SCCanStatus rc=CAN_OK;
 	// Configure Rx filter
 	FilterDefinition FilterConfig;
-	FilterConfig.IdType = CAN_STDID;
+	FilterConfig.ExtendedID = false;
 	FilterConfig.FilterIndex = 0;
 	FilterConfig.FilterType = CAN_FILTER_MASK;
 	FilterConfig.FilterConfig = CAN_FILTER_TO_RXFIFO0;
@@ -49,7 +46,7 @@ SCCanStatus SimpleCan::DenyAllMessages()
 	return rc;
 }
 
-bool SimpleCan::SendMessage(const uint8_t* pData, int NumBytes, int CanID, bool UseEFF)
+bool SimpleCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
 	// Skip command if sender ID is disabled.
 	// if (SendIDFilterFunc && !SendIDFilterFunc(CanID)) return true; 
@@ -57,17 +54,8 @@ bool SimpleCan::SendMessage(const uint8_t* pData, int NumBytes, int CanID, bool 
 	// Skip sending if disabled.
 	if (DoNotSend) return true;
 
-	// Serial.printf("CAN: Queueing message with ID 0x%x, %d messages in TX queue.\n", CanID, TxQueue.NumElements);
 
-	CANTxMessage Msg;
-	Msg.CanID = CanID;
-	Msg.EFF = UseEFF;
-	Msg.Size = NumBytes;
-	Msg.RTR = false;
-	memcpy(Msg.Data, pData, NumBytes);
-	if (TxQueue.NumElements<TX_QUEUE_SIZE)
-		TxQueue.Enqueue(Msg);
-	else 
+	if (TxQueue.get_free()<sizeof(CanTxMessage)+NumBytes)
 	{
 		Serial.println("CAN Error: Tx buffer overrun");
 		
@@ -75,6 +63,15 @@ bool SimpleCan::SendMessage(const uint8_t* pData, int NumBytes, int CanID, bool 
 		TriggerSending();
 		return false;
 	}
+	CanTxMessage *Msg = TxQueue.reserve();
+	Msg->Identifier = CanID;
+	Msg->ExtendedID = UseEFF;
+	Msg->Size = NumBytes;
+	Msg->RemoteFrame = false;
+	Msg->FDCanFrame = UseFDCAN || (NumBytes > 8);
+	memcpy(reinterpret_cast<uint8_t*>(&Msg[1]), pData, NumBytes);
+	TxQueue.write(NumBytes);
+	//Serial.printf("TX queue: consuming %d bytes\n", NumBytes+sizeof(CanTxMessage));
 	
 	// Kick sending of messages from buffer.
 	
@@ -87,7 +84,7 @@ bool SimpleCan::SendMessage(const uint8_t* pData, int NumBytes, int CanID, bool 
 // Sending an RTR frame is exactly the same as SendMessage(), except for setting the RTR bit in the header
 // and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
 // return payload. The answer to the RTR frame will be received and handled like any other CAN message.
-bool SimpleCan::RequestMessage(int NumBytes, int CanID, bool UseEFF)
+bool SimpleCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
 	// Skip command if sender ID is disabled.
 	// if (SendIDFilterFunc && !SendIDFilterFunc(CanID)) return true; 
@@ -95,16 +92,8 @@ bool SimpleCan::RequestMessage(int NumBytes, int CanID, bool UseEFF)
 	// Skip sending if disabled.
 	if (DoNotSend) return true;
 
-	// PrintLog("CAN: Queueing RTR message with ID 0x%x, %d messages in TX queue.\n", CanID, TxQueue.NumElements);
 
-	CANTxMessage Msg;
-	Msg.CanID = CanID;
-	Msg.EFF = UseEFF;
-	Msg.Size = NumBytes;
-	Msg.RTR = true;
-	if (TxQueue.NumElements<TX_QUEUE_SIZE)
-		TxQueue.Enqueue(Msg);
-	else 
+	if (TxQueue.get_free()<sizeof(CanTxMessage))
 	{
 		Serial.println("CAN Error: Tx buffer overrun");
 		
@@ -112,6 +101,14 @@ bool SimpleCan::RequestMessage(int NumBytes, int CanID, bool UseEFF)
 		TriggerSending();
 		return false;
 	}
+	CanTxMessage *Msg = TxQueue.reserve();
+	Msg->Identifier = CanID;
+	Msg->ExtendedID = UseEFF;
+	Msg->Size = NumBytes;
+	Msg->RemoteFrame = true;
+	Msg->FDCanFrame = UseFDCAN;
+	TxQueue.write(0);
+	//Serial.printf("TX queue: consuming %d bytes\n", 0+sizeof(CanTxMessage));
 	
 	// Kick sending of messages from buffer.
 	TriggerSending();
@@ -119,16 +116,90 @@ bool SimpleCan::RequestMessage(int NumBytes, int CanID, bool UseEFF)
 	return true;
 }
 
-void SimpleCan::DisableBlinkOnActivity() 
-{
-	BlinkOnActivity=false;
-};
 
-void SimpleCan::EnableBlinkOnActivity(uint8_t LEDPinNum) 
+//--------------------------------------------------------------------------------------
+// Implementation of the basic recerive handler, which is common for all platforms
+
+RxHandlerBase::RxHandlerBase(uint16_t dataLength)
 {
-	LED.SetPin(LEDPinNum);
-	BlinkOnActivity=true;
-};
+	_rxData = new byte[dataLength];
+	_rxDataLength = dataLength;
+}
+
+
+void RxHandlerBase::SetProfileCallback(uint16_t dataLength, RxCallback callback, void* userData)
+{
+	ProfileCallback = callback;
+	ProfileClass = userData;
+}
+
+
+RxHandlerBase::~RxHandlerBase()
+{
+	delete[] _rxData; 
+}
+
+
+// This function is called by the actual low level ISR when a new frame is received.
+// ISR, absolutely no printing to serial!!
+void RxHandlerBase::Notify(/*...*/)
+{
+	CanRxMessage *Msg;
+	bool overrun = false;
+	if (SimpleCan::RxQueue.get_free() > sizeof(CanRxMessage) + 64)
+	{
+		Msg = SimpleCan::RxQueue.reserve();
+	}
+	else
+	{
+		SimpleCan::rx_overrun++;
+		overrun = true;
+		Msg = reinterpret_cast<CanRxMessage*>(alloca(sizeof(CanRxMessage) + 64));
+	}
+	
+
+    // Copy the received message into the _rxData buffer
+	if (CANReadFrame(&Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), 64))
+	{
+		// Let the hardware know the frame has been read.
+		ReleaseRcvBuffer();
+		if (!overrun)
+		{
+			SimpleCan::RxQueue.write(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
+		}
+	}
+}
+
+bool RxHandlerBase::Loop()
+{
+	bool rc = false;
+
+	// If a callback was registered, convert the header info and call the callback function.
+	if (ProfileCallback != NULL)
+	{
+ 		if (SimpleCan::RxQueue.get_num_elements()) //has a frame stored on the side
+		{
+			CanRxMessage *Msg = SimpleCan::RxQueue.peek();
+			// Serial.println("Read message from buffer");
+			// --- Convert the header and call the user provided RX handler.
+			if (Msg->Error) Serial.println("Dequeue msg with error");
+			ProfileCallback(Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), ProfileClass);
+			SimpleCan::RxQueue.read(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
+		}
+		if (SimpleCan::rx_overrun)
+		{
+			Serial.printf("SimpleCAN RX overrun (%d messages discarded!)\n", SimpleCan::rx_overrun);
+			SimpleCan::rx_overrun = 0;
+		}
+		
+	}
+	else 
+	{
+		Serial.println("RxHandlerBase::Loop(): No callback set!");
+	}
+	
+	return rc;
+}
 
 //***********************************************************************
 //***********************************************************************
@@ -242,76 +313,3 @@ void SimpleCANProfile::CANGetFloat(const uint8_t* pData, float* pVal1, float* pV
 	memcpy(pVal1, pData, sizeof(float));
 	memcpy(pVal2, pData+sizeof(float), sizeof(float));
 }
-
-
-//--------------------------------------------------------------------------------------
-// Implementation of the basic recerive handler, which is common for all platforms
-
-RxHandlerBase::RxHandlerBase(uint16_t dataLength)
-{
-	_rxData = new byte[dataLength];
-	_rxDataLength = dataLength;
-}
-
-
-void RxHandlerBase::SetProfileCallback(uint16_t dataLength, RxCallback callback, void* userData)
-{
-	ProfileCallback = callback;
-	ProfileClass = userData;
-}
-
-
-RxHandlerBase::~RxHandlerBase()
-{
-	delete[] _rxData; 
-}
-
-
-// This function is called by the actual low level ISR when a new frame is received.
-// ISR, absolutely no printing to serial!!
-void RxHandlerBase::Notify(/*...*/)
-{
-	CanRxMessage Msg;
-
-    // Copy the received message into the _rxData buffer
-	if (!CANReadFrame(&Msg.SCHeader, Msg.Data, 8))
-	{
-		// Error_Handler();
-		Serial.println("Error returned from ReadFrame!");
-		delay(100);
-	}
-    // Let the hardware know the frame has been read.
-	ReleaseRcvBuffer();
-
-	Msg.Error = RxErrorFlag;
-	if (SimpleCan::RxQueue.NumElements<16)
-		SimpleCan::RxQueue.Enqueue(Msg);
-}
-
-void RxHandlerBase::CANBusACtivityDetected()
-{
-	if (SimpleCan::BlinkOnActivity)
-		SimpleCan::LED.Toggle();
-}
-
-bool RxHandlerBase::Loop()
-{
-	bool rc = false;
-
-	// If a callback was registered, convert the header info and call the callback function.
-	if (ProfileCallback != NULL)
-	{
-		CanRxMessage Msg;
- 		if (1 && SimpleCan::RxQueue.Dequeue(&Msg))
-		{
-			// Serial.println("Read message from buffer");
-			// --- Convert the header and call the user provided RX handler.
-			if (Msg.Error) Serial.println("Dequeue msg with error");
-			ProfileCallback(Msg.SCHeader, Msg.Data, ProfileClass);
-		}
-	}
-	else Serial.println("RxHandlerBase::Loop(): No callback set!");
-	
-	return rc;
-}
-

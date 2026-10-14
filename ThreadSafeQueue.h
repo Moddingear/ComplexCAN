@@ -1,93 +1,71 @@
-#ifndef SAFE_QUEUE
-#define SAFE_QUEUE
+#pragma once
 
-#include <queue>
 
+template <class T, size_t memory_size, size_t max_data_size>
+class CircularBuffer
+{
+private:
+    uint8_t buffer[memory_size];
+    uint8_t num_elements = 0;
+    uint16_t free_mem = memory_size;
+    uint16_t readptr=0, writeptr=0;
+public:
+    // Get a pointer to write to
+    T* reserve()
+    {
+        size_t elem_size = sizeof(T)+max_data_size;
+        if (writeptr+elem_size > memory_size)
+        {
+            return reinterpret_cast<T*>(buffer);
+        }
+        return reinterpret_cast<T*>(&buffer[writeptr]);
+    }
+
+    // Advance write pointer (after reserve)
+    void write(size_t data_size)
+    {
+        size_t elem_size_initial = sizeof(T)+max_data_size;
+        if (writeptr+elem_size_initial > memory_size)
+        {
+            writeptr = 0;
+        }
+        size_t elem_size = sizeof(T) + data_size;
+        writeptr += elem_size;
+        num_elements++;
+        free_mem -= elem_size;
+    }
+
+    // Read data at the read pointer location
+    T* peek()
+    {
+        return reinterpret_cast<T*>(&buffer[readptr]);
+    }
+
+    // Advance read pointer (after peek)
+    void read(size_t data_size)
+    {
+        size_t elem_size = sizeof(T)+data_size;
+        readptr += elem_size;
+        free_mem += elem_size;
+        if (readptr + sizeof(T)+max_data_size > memory_size)
+        {
+            readptr = 0;
+        }
+        num_elements--;
+        return;
+    }
+
+    uint8_t get_num_elements() { return num_elements; }
+
+    uint16_t get_free() { return free_mem; }
+};
 
 #if defined(_STM32_DEF_)
 
-// A simple, non-threadsafe queue for non-multithreading CPUs.
-template <class T>
-class SafeQueue
-{
-    public:
-        SafeQueue(int Size) : q(),NumElements(0)
-        {}
-
-        // Add an element to the queue.
-        void Enqueue(T t)
-        {
-            q.push(t);
-            NumElements++;
-        }
-
-        // Get the "front"-element.
-        // If the queue is empty, wait till a element is avaiable.
-        bool Dequeue(T* pVal)
-        {
-            if(!q.empty())
-            {
-                *pVal = q.front();
-                q.pop();
-                NumElements--;
-                return true;
-            }
-            return false;
-        }
-
-        int NumElements;
-
-private:
-  std::queue<T> q;
-};
-#endif
-
-
-#if defined(xxx)
-// A threadsafe-queue for CPUs supporting std::mutex
-// Inspired by: https://stackoverflow.com/questions/15278343/c11-thread-safe-queue
-#include <mutex>
-
-template <class T>
-class SafeQueue
-{
-    public:
-        SafeQueue(int Size) : q(), m(), NumElements(0)
-        {}
-
-        // Add an element to the queue.
-        void Enqueue(T t)
-        {
-            std::lock_guard<std::mutex> lock(m);
-            q.push(t);
-            NumElements++;
-        }
-
-        // Get the "front"-element.
-        // If the queue is empty, wait till a element is avaiable.
-        bool Dequeue(T* pVal)
-        {
-            std::unique_lock<std::mutex> lock(m);
-            if(!q.empty())
-            {
-                *pVal = q.front();
-                q.pop();
-                NumElements--;
-                return true;
-            }
-            return false;
-        }
-
-        int NumElements;
-
-private:
-  std::queue<T> q;
-  mutable std::mutex m;
-};
+//Single-threaded, don't care about mutex
+#define SafeCircularBuffer CircularBuffer
 
 #endif
-
-
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32)
 
@@ -96,7 +74,7 @@ private:
 #include "freertos/semphr.h"
 
 template <class T>
-class SafeQueue
+class SafeCircularBuffer
 {
     public:
         SafeQueue(int Size=16) 
@@ -138,34 +116,5 @@ private:
   QueueHandle_t Queue;
   SemaphoreHandle_t QueueSema;
 };
-
-#endif
-
-#if 0
-template<class T>
-T volatile_copy(T const volatile& source) {
-    static_assert(std::is_trivially_copyable_v<T>, "Input must be trivially copyable");
-    T dest;
-    auto* dest_ptr = dynamic_cast<char*>(&dest);
-    auto* source_ptr = dynamic_cast<char const volatile*>(&source);
-
-    for(int i = 0; i < sizeof(T); i++) {
-        dest_ptr[i] = source_ptr[i];
-    }
-
-    return dest;
-}
-
-template<class T>
-void volatile_assign(T volatile& dest, T const& source) {
-    static_assert(std::is_trivially_copyable_v<T>, "Input must be trivially copyable");
-    auto* source_ptr = dynamic_cast<char*>(&source);
-    auto* dest_ptr   = dynamic_cast<char volatile*>(&dest);
-
-    for(int i = 0; i < sizeof(T); i++) {
-        dest_ptr[i] = source_ptr[i];
-    }
-}
-#endif
 
 #endif

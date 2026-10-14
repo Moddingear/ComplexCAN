@@ -81,9 +81,9 @@ bool RxHandlerESP32::CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, i
 	SCHeader->RxTimestamp = -1;			// Unusupported...
 	SCHeader->FilterIndex = -1;
 	SCHeader->IsFilterMatchingFrame = -1;
-	SCHeader->RxFrameType = __frame.FIR.B.RTR==CAN_RTR ? SCFrameType::CAN_REMOTE_FRAME : SCFrameType::CAN_DATA_FRAME;
+	SCHeader->RemoteFrame = __frame.FIR.B.RTR==CAN_RTR ? SCFrameType::CAN_REMOTE_FRAME : SCFrameType::CAN_DATA_FRAME;
 	SCHeader->DataLength = __frame.FIR.B.DLC;
-	SCHeader->Format = SCCanType::CAN_CLASSIC;
+	SCHeader->FDCANFrame = SCCanType::CAN_CLASSIC;
 
     // Check if this is a standard or extended CAN frame
     if(__frame.FIR.B.FF==CAN_frame_std)
@@ -91,13 +91,13 @@ bool RxHandlerESP32::CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, i
  	   	// Standard frame
         //Get Message ID and header info
         SCHeader->Identifier = _CAN_GET_STD_ID;
-		SCHeader->IdType = SCIdType::CAN_STDID;
+		SCHeader->ExtendedID = SCIdType::CAN_STDID;
 
-		// if (SCHeader->RxFrameType!=SCFrameType::CAN_DATA_FRAME)
+		// if (SCHeader->RemoteFrame!=SCFrameType::CAN_DATA_FRAME)
 		//	Serial.print(" RTR ");
 
         // Deep copy data bytes
-        if (SCHeader->RxFrameType==SCFrameType::CAN_DATA_FRAME)
+        if (SCHeader->RemoteFrame==SCFrameType::CAN_DATA_FRAME)
 			for(int i=0; i<SCHeader->DataLength && i<MaxDataLen; i++)
 				pData[i]=MODULE_CAN->MBX_CTRL.FCTRL.TX_RX.STD.data[i];
     }
@@ -106,10 +106,10 @@ bool RxHandlerESP32::CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, i
 		// Extended frame
         // Get Message ID and header info
         SCHeader->Identifier = _CAN_GET_EXT_ID;
-		SCHeader->IdType = SCIdType::CAN_EXTID;
+		SCHeader->ExtendedID = SCIdType::CAN_EXTID;
 
         //Deep copy data bytes
-        if (SCHeader->RxFrameType==SCFrameType::CAN_DATA_FRAME)
+        if (SCHeader->RemoteFrame==SCFrameType::CAN_DATA_FRAME)
 			for(int i=0; i<SCHeader->DataLength && i<MaxDataLen; i++)
 				pData[i]=MODULE_CAN->MBX_CTRL.FCTRL.TX_RX.EXT.data[i];
     }
@@ -146,10 +146,6 @@ class SimpleCan_ESP32_DevC : public SimpleCan
 		// These functions may be overloaded if required.
 		SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData);
 		SCCanStatus DeactivateNotification();
-
-		// Set bus termination on/off (may not be available on all platforms).
-		// Default is on.
-		SCCanStatus SetBusTermination(bool On);
 
 		// Start and stop all activities. Changing acceptance filters requires stop()
 		// before doing so on some platforms.
@@ -295,9 +291,6 @@ static  void CAN_isr(void *arg_p)
 		// Serial.print("r");
 		EmptyRxFifo();
 	}
-
-	if (SimpleCan_ESP32_DevC::RxHandlerP)
-		SimpleCan_ESP32_DevC::RxHandlerP->CANBusACtivityDetected();
 }
 
 
@@ -314,11 +307,6 @@ SimpleCan_ESP32_DevC::SimpleCan_ESP32_DevC(uint32_t _TxPin, uint32_t _RxPin) : S
 	
 	SendIDFilterFunc = 0;
 	CANBusErrors = 0;
-}
-
-SCCanStatus SimpleCan_ESP32_DevC::SetBusTermination(bool On)
-{
-	return CAN_UNSUPPORTED;
 }
 
 bool SimpleCan_ESP32_DevC::Loop()
@@ -491,7 +479,7 @@ SCCanStatus SimpleCan_ESP32_DevC::ConfigFilter(FilterDefinition *SCFilter)
 
 	if (SCFilter->FilterIndex>0) return CAN_UNSUPPORTED;
 
-	if (SCFilter->IdType==CAN_STDID && SCFilter->FilterType==CAN_FILTER_MASK)
+	if (SCFilter->ExtendedID==CAN_STDID && SCFilter->FilterType==CAN_FILTER_MASK)
 	{
 		PrintLnLog("CAN: setting filter single ID & mask, Std Frame");
 		uint32_t Code = SCFilter->FilterID1; 
@@ -505,14 +493,14 @@ SCCanStatus SimpleCan_ESP32_DevC::ConfigFilter(FilterDefinition *SCFilter)
 		MODULE_CAN->MBX_CTRL.ACC.MASK[3] = 0xff; 
 		MODULE_CAN->MOD.B.AFM = 1;
 	}
-	else if (SCFilter->IdType==CAN_STDID && SCFilter->FilterType==CAN_FILTER_DUAL)
+	else if (SCFilter->ExtendedID==CAN_STDID && SCFilter->FilterType==CAN_FILTER_DUAL)
 	{
 		PrintLnLog("CAN: Unsupported filter mode");
 		// Same as single, but with CODE/MASK[2/3] in addition.
 		// ACR3 / AMR3 is shared between the two filters.
 	    return CAN_UNSUPPORTED;
 	}
-	else if (SCFilter->IdType==CAN_EXTID && SCFilter->FilterType==CAN_FILTER_MASK)
+	else if (SCFilter->ExtendedID==CAN_EXTID && SCFilter->FilterType==CAN_FILTER_MASK)
 	{
 		PrintLnLog("CAN: setting filter single ID & mask, Ext Frame");
 		uint32_t Code = SCFilter->FilterID1; 
@@ -586,7 +574,7 @@ bool SimpleCan_ESP32_DevC::SendNextMessageFromQueue()
 	if(!MODULE_CAN->SR.B.TBS)
 		return true;
 
-	CANTxMessage Msg;
+	CanTxMessage Msg;
 	if (!TxQueue.Dequeue(&Msg))
 		// Nothing to send...
 		return true;

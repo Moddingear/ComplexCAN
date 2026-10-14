@@ -66,7 +66,7 @@ class CANPingPong : public SimpleCANProfile
                     pRxCommands->ReceivedFloat(Device, Val);
                     break;
                 case CANID_PP_RTRINT:
-                    if (rxHeader.RxFrameType==CAN_REMOTE_FRAME)
+                    if (rxHeader.RemoteFrame)
                         pRxCommands->ReceivedRequestInt(Device);
                     else
                     {

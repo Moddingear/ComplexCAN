@@ -32,15 +32,12 @@ class SimpleCan_STM32G4xx : public SimpleCan
 		SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData);
 		SCCanStatus DeactivateNotification();
 
-		// Set bus termination on/off (may not be available on all platforms).
-		// Default is on.
-		SCCanStatus SetBusTermination(bool On);
-
 		// Start and stop all activities. Changing acceptance filters requires stop()
 		// before doing so on some platforms.
 		SCCanStatus Start();
 		SCCanStatus Stop();
 
+		SCCanStatus ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt);
 		// Modify the global filter to reject everything which is not matching the other filters and to accept all remote frames. 
 		SCCanStatus ConfigGlobalFilter();
 
@@ -48,26 +45,19 @@ class SimpleCan_STM32G4xx : public SimpleCan
 		SCCanStatus ConfigFilter(FilterDefinition *filterDef);
 
 		// Start sending messages from the queue to the CAN bus, until the TX queue is emty.
-		bool TriggerSending() { return SendNextMessageFromQueue();};
+		virtual bool TriggerSending() override { return SendNextMessageFromQueue(); };
+
+		static bool SendNextMessageFromQueue();
+
+		static SCCanStatus KickMessage(const CanTxMessage* message);
 
 
 		//*******************************************************
 		//*** Other methods ************
-
-		static bool SendNextMessageFromQueue();
-
-		// Sending an RTR frame is exactly the same as SendMessage(), except for setting the RTR bit in the header
-		// and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
-		// return payload. The answer to the RTR frame will be received and handled like any other CAN message.
-		// bool RequestMessage(int NumBytes, int CanID, bool UseEFF=false);
-		static bool SendRequestMessage(int NumBytes, int CanID, bool UseEFF);
-
-		SCCanStatus ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt);
-		SCCanStatus AddMessageToTxFifoQ(FDCAN_TxHeaderTypeDef *pTxHeader, uint8_t *pTxData);
+		
 		bool Loop();
 
 		static FDCAN_HandleTypeDef _hfdcan1;
-		uint8_t TxData[8];
 
 		static RxHandlerSTM32 *RxHandlerP;		
 
