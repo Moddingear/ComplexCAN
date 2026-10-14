@@ -7,27 +7,27 @@
 */
 
 #include <Arduino.h>
-#include <SimpleCAN.h>
+#include <ComplexCAN.h>
 
-uint8_t SimpleCan::rx_overrun = 0;
-SafeCircularBuffer<CanRxMessage, 1024, 64, true> SimpleCan::RxQueue;
-SafeCircularBuffer<CanTxMessage, 1024, 64, false> SimpleCan::TxQueue;
+uint8_t ComplexCan::rx_overrun = 0;
+SafeCircularBuffer<CanRxMessage, 1024, 64, true> ComplexCan::RxQueue;
+SafeCircularBuffer<CanTxMessage, 1024, 64, false> ComplexCan::TxQueue;
 
-SCCanStatus SimpleCan::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
+CCStatus ComplexCan::ActivateNotification(RxCallback callback, void* userData)
 {
 	rx_callback = callback;
 	rx_callback_param = userData;
 	return CAN_OK;
 }
 
-SCCanStatus SimpleCan::DeactivateNotification()
+CCStatus ComplexCan::DeactivateNotification()
 {
 	rx_callback = nullptr;
 	return CAN_OK;
 }
 
 
-bool SimpleCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
+bool ComplexCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
 	// Skip command if sender ID is disabled.
 	// if (SendIDFilterFunc && !SendIDFilterFunc(CanID)) return true; 
@@ -65,7 +65,7 @@ bool SimpleCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t Can
 // Sending an RTR frame is exactly the same as SendMessage(), except for setting the RTR bit in the header
 // and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
 // return payload. The answer to the RTR frame will be received and handled like any other CAN message.
-bool SimpleCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
+bool ComplexCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
 	// Skip command if sender ID is disabled.
 	// if (SendIDFilterFunc && !SendIDFilterFunc(CanID)) return true; 
@@ -98,9 +98,9 @@ bool SimpleCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bo
 }
 
 // Set a filter to accept all incoming messages
-SCCanStatus SimpleCan::AcceptAllMessages()
+CCStatus ComplexCan::AcceptAllMessages()
 {
-	SCCanStatus rc=CAN_OK;
+	CCStatus rc=CAN_OK;
 	// Configure Rx filter
 	FilterDefinition FilterConfig;
 	FilterConfig.ExtendedID = false;
@@ -114,9 +114,9 @@ SCCanStatus SimpleCan::AcceptAllMessages()
 }
 
 // Set a filter to deny all incoming messages (except for CAN ID 0xFFFF)
-SCCanStatus SimpleCan::DenyAllMessages()
+CCStatus ComplexCan::DenyAllMessages()
 {
-	SCCanStatus rc=CAN_OK;
+	CCStatus rc=CAN_OK;
 	// Configure Rx filter
 	FilterDefinition FilterConfig;
 	FilterConfig.ExtendedID = false;
@@ -129,7 +129,7 @@ SCCanStatus SimpleCan::DenyAllMessages()
 	return rc;
 }
 
-bool SimpleCan::Loop()
+bool ComplexCan::Loop()
 {
 	bool has_unpacked = false;
 	if (RxQueue.get_num_elements()) //has a frame stored on the side
@@ -144,56 +144,8 @@ bool SimpleCan::Loop()
 	}
 	if (rx_overrun)
 	{
-		Serial.printf("SimpleCAN RX overrun (%d messages discarded!)\n", rx_overrun);
+		Serial.printf("ComplexCAN RX overrun (%d messages discarded!)\n", rx_overrun);
 		rx_overrun = 0;
 	}
 	return has_unpacked;
 }
-
-#if 0
-//--------------------------------------------------------------------------------------
-// Implementation of the basic recerive handler, which is common for all platforms
-
-RxHandlerBase::RxHandlerBase(uint16_t dataLength)
-{
-	_rxData = new byte[dataLength];
-	_rxDataLength = dataLength;
-}
-
-
-RxHandlerBase::~RxHandlerBase()
-{
-	delete[] _rxData; 
-}
-
-
-// This function is called by the actual low level ISR when a new frame is received.
-// ISR, absolutely no printing to serial!!
-void RxHandlerBase::Notify(/*...*/)
-{
-	CanRxMessage *Msg;
-	bool overrun = false;
-	if (SimpleCan::RxQueue.get_free() > sizeof(CanRxMessage) + 64)
-	{
-		Msg = SimpleCan::RxQueue.reserve();
-	}
-	else
-	{
-		SimpleCan::rx_overrun++;
-		overrun = true;
-		Msg = reinterpret_cast<CanRxMessage*>(alloca(sizeof(CanRxMessage) + 64));
-	}
-	
-
-    // Copy the received message into the _rxData buffer
-	if (CANReadFrame(&Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), 64))
-	{
-		// Let the hardware know the frame has been read.
-		ReleaseRcvBuffer();
-		if (!overrun)
-		{
-			SimpleCan::RxQueue.write(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
-		}
-	}
-}
-#endif

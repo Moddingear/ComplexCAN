@@ -1,31 +1,18 @@
 
 // #include "driver/twai.h"
 
-/*
-
-    Portable CAN bus library - implementation for STM B-G431B-ESC1 board.
-
-	This module implements the SimpleCan interface for a specific platorm.
-
-	This code was strongly inspired by the discussions and proposals on the SimplFOC forum, especially
-	by work provided by erwin74, JorgeMaker and Owen_Williams of the SimpleFOC community (see this thread: https://community.simplefoc.com/t/can-bus-support/407/21).
-	The code versions provided by erwin74 and Owen_Williams were the basis for this derived work which attempts
-	to be more modular and portable. Actually, most of the code in this specific module is their work.
-
-	(c) 2022 Christian Schmidmer, use is subject to MIT license
-*/
 #include <Arduino.h>
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32)
 
 #include <esp_twai.h>
 #include <esp_twai_onchip.h>
-#include <ESP32_SimpleCAN.h>
+#include <ComplexCAN_ESP32.h>
 
 
 static IRAM_ATTR bool twai_rx_callback(twai_node_handle_t handle, const twai_rx_done_event_data_t *edata, void *user_ctx)
 {
-	CanRxMessage *scanmsg = SimpleCan::RxQueue.reserve();
+	CanRxMessage *scanmsg = ComplexCan::RxQueue.reserve();
     if (!scanmsg) {
         ets_printf("CAN RX Ringbuff full, dropping frame\n");
         return false;
@@ -38,13 +25,13 @@ static IRAM_ATTR bool twai_rx_callback(twai_node_handle_t handle, const twai_rx_
 		return false;
     }
 	scanmsg->SCHeader.Identifier = message.header.id;
-	scanmsg->SCHeader.DataLength = message.header.dlc;
+	scanmsg->SCHeader.DataLength = twaifd_dlc2len(message.header.dlc);
 	scanmsg->SCHeader.ExtendedID = message.header.ide;
 	scanmsg->SCHeader.FDCANFrame = message.header.fdf;
 	scanmsg->SCHeader.RemoteFrame = message.header.rtr;
 	scanmsg->SCHeader.RxTimestamp = message.header.timestamp;
 	scanmsg->Error = message.header.esi;
-	return SimpleCan::RxQueue.write(scanmsg->SCHeader.DataLength);
+	return ComplexCan::RxQueue.write(scanmsg->SCHeader.DataLength);
 }
 
 static IRAM_ATTR bool twai_tx_callback(twai_node_handle_t handle, const twai_tx_done_event_data_t *edata, void *user_ctx)
@@ -53,7 +40,6 @@ static IRAM_ATTR bool twai_tx_callback(twai_node_handle_t handle, const twai_tx_
         ets_printf("CAN Failed to transmit message, ID: 0x%X\n", edata->done_tx_frame->header.id);
     }
 	return false;
-    //return SimpleCan_ESP32_DevC::SendNextMessageFromQueue(); // No task wake required
 }
 
 static IRAM_ATTR bool twai_on_error_callback(twai_node_handle_t handle, const twai_error_event_data_t *edata, void *user_ctx)
@@ -70,16 +56,10 @@ static bool IRAM_ATTR twai_on_state_change_callback(twai_node_handle_t handle, c
 }
 
 // static members
-int SimpleCan_ESP32::CANBusErrors;
+int ComplexCan_ESP32::CANBusErrors;
 
 
-SimpleCan* CreateCanLib(uint32_t TxPin, uint32_t RxPin)
-{
-	return (SimpleCan*) new SimpleCan_ESP32(TxPin, RxPin);
-}
-
-
-SimpleCan_ESP32::SimpleCan_ESP32(uint32_t _TxPin, uint32_t _RxPin) : SimpleCan(_TxPin, _RxPin)
+ComplexCan_ESP32::ComplexCan_ESP32(uint32_t _TxPin, uint32_t _RxPin) : ComplexCan(_TxPin, _RxPin)
 {
     RxPin = (gpio_num_t)_RxPin;
     TxPin = (gpio_num_t)_TxPin;
@@ -87,22 +67,17 @@ SimpleCan_ESP32::SimpleCan_ESP32(uint32_t _TxPin, uint32_t _RxPin) : SimpleCan(_
 	CANBusErrors = 0;
 }
 
-bool SimpleCan_ESP32::Loop()
-{
-	return true;
-}
-
-SCCanStatus SimpleCan_ESP32::Start(void)
+CCStatus ComplexCan_ESP32::Start(void)
 {
 	return twai_node_enable(can_handle) == ESP_OK ? CAN_OK : CAN_ERROR;
 }
 
-SCCanStatus SimpleCan_ESP32::Stop(void)
+CCStatus ComplexCan_ESP32::Stop(void)
 {
 	return twai_node_disable(can_handle) == ESP_OK ? CAN_OK : CAN_ERROR;
 }
 
-SCCanStatus SimpleCan_ESP32::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc)
+CCStatus ComplexCan_ESP32::Init(uint32_t arbitration_speed, uint32_t data_speed, CanIDFilter IDFilterFunc)
 {
 	twai_onchip_node_config_t node_config = {
 		.io_cfg = {
@@ -112,11 +87,13 @@ SCCanStatus SimpleCan_ESP32::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc)
 			.bus_off_indicator = GPIO_NUM_NC,
 		},
 		.bit_timing = {
-			.bitrate = 1000000,
+			.bitrate = arbitration_speed,
 		},
+		#ifdef SOC_TWAI_SUPPORT_FD
 		.data_timing = {
-			.bitrate = 5000000,
+			.bitrate = data_speed,
 		},
+		#endif
 		.fail_retry_cnt = 3,
 		.tx_queue_depth = 32,
 	};
@@ -132,7 +109,7 @@ SCCanStatus SimpleCan_ESP32::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc)
 	return CAN_OK;
 }
 
-SCCanStatus SimpleCan_ESP32::ConfigFilter(FilterDefinition *SCFilter)
+CCStatus ComplexCan_ESP32::ConfigFilter(FilterDefinition *SCFilter)
 {
 	if (SCFilter->FilterType == CAN_FILTER_RANGE)
 	{
@@ -161,17 +138,17 @@ SCCanStatus SimpleCan_ESP32::ConfigFilter(FilterDefinition *SCFilter)
 }
 
 
-SCCanStatus SimpleCan_ESP32::ConfigGlobalFilter()
+CCStatus ComplexCan_ESP32::ConfigGlobalFilter()
 {
 	return CAN_OK;
 }
 
-bool SimpleCan_ESP32::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
+bool ComplexCan_ESP32::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
 	twai_frame_t frame = {
 		.header = {
 			.id = CanID,
-			.dlc = NumBytes,
+			.dlc = twaifd_len2dlc(NumBytes),
 		},
 		.buffer = const_cast<uint8_t*>(pData),
 		.buffer_len = NumBytes,
@@ -184,12 +161,12 @@ bool SimpleCan_ESP32::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32
 	return twai_node_transmit(can_handle, &frame, 0) == ESP_OK;
 }
 
-bool SimpleCan_ESP32::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
+bool ComplexCan_ESP32::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
 	twai_frame_t frame = {
 		.header = {
 			.id = CanID,
-			.dlc = NumBytes,
+			.dlc = twaifd_len2dlc(NumBytes),
 		},
 		.buffer = nullptr,
 		.buffer_len = 0,
@@ -202,22 +179,22 @@ bool SimpleCan_ESP32::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseE
 	return twai_node_transmit(can_handle, &frame, 0) == ESP_OK;
 }
 
-int SimpleCan_ESP32::GetTxErrors() 
+int ComplexCan_ESP32::GetTxErrors() 
 {
 	return (int)(0);
 }
 
-int SimpleCan_ESP32::GetRxErrors() 
+int ComplexCan_ESP32::GetRxErrors() 
 {
 	return (int)(0);
 }
 
-int SimpleCan_ESP32::GetOtherErrors() 
+int ComplexCan_ESP32::GetOtherErrors() 
 {
 	return CANBusErrors;
 }
 
-SCCanStatus SimpleCan_ESP32::GetStatus(uint32_t* Status, char* Str) 
+CCStatus ComplexCan_ESP32::GetStatus(uint32_t* Status, char* Str) 
 {
 	return CAN_OK;
 };

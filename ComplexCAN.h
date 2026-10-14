@@ -1,25 +1,3 @@
-/*
-
-    Portable CAN bus library
-
-    Interface, clases and enums for a platform independent CAN bus library.  
-
-	A platform specific implementation of the abstract class SimpleCan as well as an implementation of the class factory CreateCanLib()
-	must be provided in a separate module. Classes using this library must first create the object by calling CreateCanLib() and can 
-	subsequently use the exposed methods. Everything on top of this interface should be completly platform independent, the implementation
-	of this interface is of course not. 
-
-	SimpleCan* pCan = CreateCanLib();
-	pCan->init(Mbit1);
-	...
-
-	This code was strongly inspired by the discussions and proposals on the SimplFOC forum, especially
-	by work provided by erwin74, JorgeMaker and Owen_Williams of the SimpleFOC community (see this thread: https://community.simplefoc.com/t/can-bus-support/407/21).
-	The code versions provided by erwin74 and Owen_Williams were the basis for this derived work which attempts
-	to be more modular and portable.
-
-	(c) 2022 Christian Schmidmer, use is subject to MIT license
-*/
 
 #pragma once
 #include "Arduino.h"
@@ -29,24 +7,9 @@
 	// Typically, these are predefined by the Arduino/platformio environment.
 #endif
 
-#if defined(ESP32)
-	#include "freertos/FreeRTOS.h"
-	#include "freertos/queue.h"
-#endif
-#include "ThreadSafeQueue.h"
+#include "circular_buffer.h"
 
-
-enum SCCanSpeed
-{
-	CUSTOM = 0,
-	Mbit1 = 10,
-	Kbit500 = 20,
-	Kbit250 = 40,
-	Kbit125 = 80,
-};
-
-
-enum SCCanStatus
+enum CCStatus
 {
   CAN_OK       = 0x00U,
   CAN_ERROR    = 0x01U,
@@ -57,7 +20,7 @@ enum SCCanStatus
 
 
 // Filter types
-enum SCFilterType
+enum CCFilterType
 {
 	CAN_FILTER_RANGE = 0,			// Range filter from FilterID1 to FilterID2 (STM32)                        
 	CAN_FILTER_DUAL = 1,			// Dual ID filter for FilterID1 or FilterID2 (STM32) 
@@ -66,7 +29,7 @@ enum SCFilterType
 };
 
 
-enum SCFilterConfig
+enum CCFilterConfig
 {
 	CAN_FILTER_DISABLE = 0,			// Disable filter element (STM32) 
 	CAN_FILTER_TO_RXFIFO0 = 1,		// Store in Rx FIFO 0 if filter matches (STM32) 
@@ -87,12 +50,12 @@ class FilterDefinition
 										- 0 and (SRAMCAN_FLS_NBR-1), if IdType is FDCAN_STANDARD_ID
 										- 0 and (SRAMCAN_FLE_NBR-1), if IdType is FDCAN_EXTENDED_ID */
 
-		SCFilterType FilterType;       /*!< Specifies the filter type.
+		CCFilterType FilterType;       /*!< Specifies the filter type.
 										This parameter can be a value of @ref FDCAN_filter_type.
 										The value FDCAN_FILTER_RANGE_NO_EIDM is permitted
 										only when IdType is FDCAN_EXTENDED_ID.                    */
 
-		SCFilterConfig FilterConfig;     /*!< Specifies the filter configuration (STM32).
+		CCFilterConfig FilterConfig;     /*!< Specifies the filter configuration (STM32).
 										This parameter can be a value of @ref FDCAN_filter_config */
 
 		bool ExtendedID;           		// SCIdType: Specifies the identifier type of the received message (standard / extended)
@@ -105,7 +68,7 @@ class FilterDefinition
 
 // Class with information on the received CAN header.
 // This is passed on to the callback function whenever a message is received.
-struct SimpleCanRxHeader
+struct ComplexCanRxHeader
 {
 	uint32_t Identifier:29;			// Specifies the identifier.
 	bool ExtendedID :1;				// SCIdType: Specifies the identifier type of the received message (standard / extended)
@@ -138,7 +101,7 @@ struct CanTxMessage
 
 struct CanRxMessage
 {
-	SimpleCanRxHeader SCHeader;
+	ComplexCanRxHeader SCHeader;
 	//uint8_t Data[8];
 	uint8_t Error = false;
 };
@@ -147,39 +110,39 @@ struct CanRxMessage
 // Callback function which should be user supplied and which will be called for each
 // incomming message which passes the filters.
 // The void* is exactly the value which was set as userData when calling ActivateNotification().
-typedef void(*RxCallback)(const SimpleCanRxHeader rxHeader, const uint8_t *rxData, void* userData);
+typedef void(*RxCallback)(const ComplexCanRxHeader rxHeader, const uint8_t *rxData, void* userData);
 
 // Pointer to function which returns true when a CAN ID is valid and false if any commands send to it shall be ignored.
 typedef bool (*CanIDFilter) (int CanID);		
 
 // This is the "driver interface", which provides low level access to the CAN bus.
-class SimpleCan 
+class ComplexCan 
 {
 	public:
-		SimpleCan(uint32_t PinTx, uint32_t PinRx) : DoNotSend(false), DoNotReceive(false) {};
+		ComplexCan(uint32_t PinTx, uint32_t PinRx) : DoNotSend(false), DoNotReceive(false) {};
 
 		//*************************************************************************************
 		//*** Pure virtual methods, which require hardware specific implementation ************
 		
 		// Initialize the CAN controller
-		virtual SCCanStatus Init(SCCanSpeed speed, CanIDFilter IDFilterFunc=0)=0;
+		virtual CCStatus Init(uint32_t arbitration_speed, uint32_t data_speed, CanIDFilter IDFilterFunc=0)=0;
 
 		// Register/deregister a callback function for message received events.
 		// The notification handler is platform specific, that is why it's needed here.
 		// These functions may be overloaded if required.
-		virtual SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData);
-		virtual SCCanStatus DeactivateNotification();
+		virtual CCStatus ActivateNotification(RxCallback callback, void* userData);
+		virtual CCStatus DeactivateNotification();
 
 		// Start and stop all activities. Changing acceptance filters requires stop()
 		// before doing so on some platforms.
-		virtual SCCanStatus Start()=0;
-		virtual SCCanStatus Stop()=0;
+		virtual CCStatus Start()=0;
+		virtual CCStatus Stop()=0;
 
 		// Modify the global filter to reject everything which is not matching the other filters and to accept all remote frames. 
-		virtual SCCanStatus ConfigGlobalFilter()=0;
+		virtual CCStatus ConfigGlobalFilter()=0;
 
 		// Modify the acceptance filter. This may be forbidden while the controller is active.
-		virtual SCCanStatus ConfigFilter(FilterDefinition *filterDef)=0;
+		virtual CCStatus ConfigFilter(FilterDefinition *filterDef)=0;
 
 		// Start sending messages from the queue to the CAN bus, until the TX queue is emty.
 		virtual bool TriggerSending()=0;
@@ -201,10 +164,10 @@ class SimpleCan
 		virtual bool RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF=false, bool UseFDCAN = false);
 
 		// Set a filter to accept all incoming messages
-		virtual SCCanStatus AcceptAllMessages(); 
+		virtual CCStatus AcceptAllMessages(); 
 
 		// Set a filter to deny all incoming messages (except for CAN ID 0xFFFF)
-		SCCanStatus DenyAllMessages();
+		CCStatus DenyAllMessages();
 
 		// Return the number of registered transmit errors or -1 if not available.
 		virtual int GetTxErrors() {return -1;};
@@ -219,7 +182,7 @@ class SimpleCan
 		// Read the status of the device. Result is platform depending.
 		// NOTE: Str must be 0 or have space for at least MAX_STATUS_STR_LEN chars. 
 		#define MAX_STATUS_STR_LEN 64
-		virtual SCCanStatus GetStatus(uint32_t* Status, char* Str) {return CAN_UNSUPPORTED;};
+		virtual CCStatus GetStatus(uint32_t* Status, char* Str) {return CAN_UNSUPPORTED;};
 
 		//Disable/enable sending of messages. Helpful for debugging and to avoid buffer overruns.
 		void DisableTx() {DoNotSend=true;};
@@ -238,8 +201,3 @@ class SimpleCan
 		bool DoNotSend;
 		bool DoNotReceive;
 };
-
-
-// Class factory which creates a SimpleCan object for the correct platform.
-// There must be exactly one such function available.
-SimpleCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx);

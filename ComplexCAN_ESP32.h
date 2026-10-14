@@ -1,33 +1,33 @@
 
 #pragma once
 
-#include <SimpleCAN.h>
+#include <ComplexCAN.h>
 
 
-class SimpleCan_ESP32 : public SimpleCan
+class ComplexCan_ESP32 : public ComplexCan
 {
 	public:
 
-		SimpleCan_ESP32(uint32_t _TxPin, uint32_t _RxPin);
+		ComplexCan_ESP32(uint32_t _TxPin, uint32_t _RxPin);
 
 		//*******************************************************
 		//*** Implementation of pure virtual methods ************
 		
 		// Initialize the CAN controller
-		SCCanStatus Init(SCCanSpeed speed, CanIDFilter IDFilterFunc=0);
+		CCStatus Init(uint32_t arbitration_speed, uint32_t data_speed, CanIDFilter IDFilterFunc=0);
 
 		// Start and stop all activities. Changing acceptance filters requires stop()
 		// before doing so on some platforms.
-		SCCanStatus Start();
-		SCCanStatus Stop();
+		CCStatus Start();
+		CCStatus Stop();
 
 		// Modify the global filter to reject everything which is not matching the other filters and to accept all remote frames. 
-		SCCanStatus ConfigGlobalFilter();
+		CCStatus ConfigGlobalFilter();
 
 		// Modify the acceptance filter. This may be forbidden while the controller is active.
-		SCCanStatus ConfigFilter(FilterDefinition *filterDef);
+		CCStatus ConfigFilter(FilterDefinition *filterDef);
 
-		//Not used: messages are sent as soon as they're given to SimpleCAN
+		//Not used: messages are sent as soon as they're given to ComplexCAN
 		bool TriggerSending() { return false;};
 
 		virtual bool SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF = false, bool UseFDCAN = false) override;
@@ -38,15 +38,10 @@ class SimpleCan_ESP32 : public SimpleCan
 		//*******************************************************
 		//*** Other methods ************
 
-
-
-		SCCanStatus ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt);
-		bool Loop();
-
 		int GetTxErrors(); 
 		int GetRxErrors(); 
 		int GetOtherErrors();
-		SCCanStatus GetStatus(uint32_t* Status, char* Str);
+		CCStatus GetStatus(uint32_t* Status, char* Str);
 
 		static int CANBusErrors;
 		

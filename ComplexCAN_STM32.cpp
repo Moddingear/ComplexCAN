@@ -1,61 +1,16 @@
 
-/*
-
-    Portable CAN bus library - implementation for STM B-G431B-ESC1 board.
-
-	This module implements the SimpleCan interface for a specific platorm.
-
-	This code was strongly inspired by the discussions and proposals on the SimplFOC forum, especially
-	by work provided by erwin74, JorgeMaker and Owen_Williams of the SimpleFOC community (see this thread: https://community.simplefoc.com/t/can-bus-support/407/21).
-	The code versions provided by erwin74 and Owen_Williams were the basis for this derived work which attempts
-	to be more modular and portable. Actually, most of the code in this specific module is their work.
-
-	(c) 2022 Christian Schmidmer, use is subject to MIT license
-*/
-
-
-/*
-	Note: In xxx\.platformio\packages\framework-arduinoststm32\system\Drivers\STM32G4xx_HAL_Driver\Src\stm32g4xx_hal_fdcan.c apply the following change:
-
-	Line 3493
-    for (ByteCounter = 0; ByteCounter < DLCtoBytes[pTxHeader->DataLength >> 16U]; ByteCounter += 4U)
-    {
-      *TxAddress = (((uint32_t)pTxData[ByteCounter + 3U] << 24U) |
-                    ((uint32_t)pTxData[ByteCounter + 2U] << 16U) |
-                    ((uint32_t)pTxData[ByteCounter + 1U] << 8U)  |
-                    (uint32_t)pTxData[ByteCounter]);
-      TxAddress++;
-    }
-
--> Change to:
-
-  if (!(pTxHeader->TxFrameType&&FDCAN_REMOTE_FRAME))
-  {
-    for (ByteCounter = 0; ByteCounter < DLCtoBytes[pTxHeader->DataLength >> 16U]; ByteCounter += 4U)
-    {
-      *TxAddress = (((uint32_t)pTxData[ByteCounter + 3U] << 24U) |
-                    ((uint32_t)pTxData[ByteCounter + 2U] << 16U) |
-                    ((uint32_t)pTxData[ByteCounter + 1U] << 8U)  |
-                    (uint32_t)pTxData[ByteCounter]);
-      TxAddress++;
-    }
-  }
-
-*/
-
-
 #if defined(STM32G4xx)
 #include <Arduino.h>
-#include <STM32_SimpleCAN.h>
+#include <ComplexCAN_STM32.h>
 
 // #define STM32G4xx
 
 
-#define HALSTATUS2CANSTATUS(s) (static_cast<SCCanStatus>(s))
+#define HALSTATUS2CANSTATUS(s) (static_cast<CCStatus>(s))
 
 extern "C" void FDCAN1_IT0_IRQHandler(void)
 {
-	HAL_FDCAN_IRQHandler(&SimpleCan_STM32G4xx::_hfdcan1);
+	HAL_FDCAN_IRQHandler(&ComplexCan_STM32G4xx::_hfdcan1);
 }
 
 void OnReceivedMessage();
@@ -74,7 +29,7 @@ extern "C" void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, 
 {
 	// If there are still data in the TxQueue, shuffle them to the HAL Tx queue
 	// Serial.println("HAL_FDCAN_TxBufferCompleteCallback");
-	SimpleCan_STM32G4xx::SendNextMessageFromQueue();
+	ComplexCan_STM32G4xx::SendNextMessageFromQueue();
 }
 
 void ArduinoPinToHAL(uint32_t APin, uint32_t* HALPin, GPIO_TypeDef** HALPort)
@@ -107,7 +62,7 @@ extern "C" void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 	periphClkInit.FdcanClockSelection = RCC_FDCANCLKSOURCE_PCLK1;
 	if (HAL_RCCEx_PeriphCLKConfig(&periphClkInit) != HAL_OK)
 	{
-		Serial.printf("SimpleCAN Failed to init clock !");
+		Serial.printf("ComplexCAN Failed to init clock !");
 		return;
 	}
 	
@@ -147,8 +102,8 @@ extern "C" void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 }
 
 
-// Utility function to convert filter definition types from SimpleCan to stm32 definition.
-SCCanStatus SC2STM32_Filter(FilterDefinition *SCFilter, FDCAN_FilterTypeDef*  STMFilter)
+// Utility function to convert filter definition types from ComplexCAN to stm32 definition.
+CCStatus SC2STM32_Filter(FilterDefinition *SCFilter, FDCAN_FilterTypeDef*  STMFilter)
 {
 	STMFilter->FilterIndex = SCFilter->FilterIndex; 
 	STMFilter->FilterID1 = SCFilter->FilterID1; 
@@ -182,12 +137,12 @@ SCCanStatus SC2STM32_Filter(FilterDefinition *SCFilter, FDCAN_FilterTypeDef*  ST
 
 
 
-CanIDFilter SimpleCan_STM32G4xx::SendIDFilterFunc;
+CanIDFilter ComplexCan_STM32G4xx::SendIDFilterFunc;
 
 
-SimpleCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx)
+ComplexCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx)
 {
-	return new SimpleCan_STM32G4xx(PinTx, PinRx);
+	return new ComplexCan_STM32G4xx(PinTx, PinRx);
 }
 
 
@@ -195,13 +150,13 @@ SimpleCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx)
 static const uint8_t DLCtoBytes[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64};
 
 // Copy max _rxDataLength bytes from received frame to _rxData. 
-bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
+bool CANReadFrame(ComplexCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
 {
 	FDCAN_RxHeaderTypeDef rx_header;
-	HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(&SimpleCan_STM32G4xx::_hfdcan1, FDCAN_RX_FIFO0, &rx_header, pData);
+	HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(&ComplexCan_STM32G4xx::_hfdcan1, FDCAN_RX_FIFO0, &rx_header, pData);
 	if (status != HAL_OK)		//!!! Data length not checked!!!
 	{
-		Serial.printf("SimpleCAN error on HAL_FDCAN_GetRxMessage: %d\n", status);
+		Serial.printf("ComplexCAN error on HAL_FDCAN_GetRxMessage: %d\n", status);
 		return false;
 	}
 	// Convert the header
@@ -222,13 +177,13 @@ void OnReceivedMessage()
 {
 	CanRxMessage *Msg;
 	bool overrun = false;
-	if (SimpleCan::RxQueue.get_free() > sizeof(CanRxMessage) + 64)
+	if (ComplexCan::RxQueue.get_free() > sizeof(CanRxMessage) + 64)
 	{
-		Msg = SimpleCan::RxQueue.reserve();
+		Msg = ComplexCan::RxQueue.reserve();
 	}
 	else
 	{
-		SimpleCan::rx_overrun++;
+		ComplexCan::rx_overrun++;
 		overrun = true;
 		Msg = reinterpret_cast<CanRxMessage*>(alloca(sizeof(CanRxMessage) + 64));
 	}
@@ -239,17 +194,17 @@ void OnReceivedMessage()
 	{
 		if (!overrun)
 		{
-			SimpleCan::RxQueue.write(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
+			ComplexCan::RxQueue.write(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
 		}
 	}
 }
 
 
-SimpleCan_STM32G4xx::SimpleCan_STM32G4xx(uint32_t PinTx, uint32_t PinRx) : SimpleCan(PinTx, PinRx)
+ComplexCan_STM32G4xx::ComplexCan_STM32G4xx(uint32_t PinTx, uint32_t PinRx) : ComplexCan(PinTx, PinRx)
 {
 	if (_hfdcan1.Instance != NULL)
 	{
-		Serial.println("SimpleCAN: CAN instance already used!");
+		Serial.println("ComplexCAN: CAN instance already used!");
 	}
 
 	_hfdcan1.Instance = FDCAN1;
@@ -259,9 +214,9 @@ SimpleCan_STM32G4xx::SimpleCan_STM32G4xx(uint32_t PinTx, uint32_t PinRx) : Simpl
 	SendIDFilterFunc = 0;
 }
 
-SCCanStatus SimpleCan_STM32G4xx::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc)
+CCStatus ComplexCan_STM32G4xx::Init(uint32_t arbitration_speed, uint32_t data_speed, CanIDFilter IDFilterFunc)
 {
-	Serial.println("SimpleCan_STM32G4xx::Init()");
+	Serial.println("ComplexCan_STM32G4xx::Init()");
 
 	if (IDFilterFunc) SendIDFilterFunc = IDFilterFunc;
 
@@ -279,18 +234,28 @@ SCCanStatus SimpleCan_STM32G4xx::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc
 	// 170MHz / Prescaler / SyncJumpWith / (TimeSeg1 + TimeSeg2 + SyncSeg) 
 	// SyncSeg = SYNC_SEG = 1, TimeSeg1 = PROP_SEG + PHASE_SEG1, TimeSeg2 = PHASE_SEG2
 	// If custom, do not set the timing bits, as those can set by retrieving the handle
-	if (speed != CUSTOM)
-	{
-		init->NominalPrescaler = (uint16_t) speed;
-		init->NominalSyncJumpWidth = 1;
-		init->NominalTimeSeg1 = 14;
-		init->NominalTimeSeg2 = 2;
+	auto pclk_freq = HAL_RCC_GetPCLK1Freq();
 
-		init->DataPrescaler = 1;
-		init->DataSyncJumpWidth = 4;
-		init->DataTimeSeg1 = 5;
-		init->DataTimeSeg2 = 4;
+	if (arbitration_speed > 0)
+	{
+		int quanta_arb = pclk_freq/arbitration_speed;
+		init->NominalPrescaler = 1;
+		init->NominalSyncJumpWidth = 1;
+		init->NominalTimeSeg1 = (quanta_arb*3)/4; //sample at 75%
+		init->NominalTimeSeg2 = quanta_arb - init->NominalSyncJumpWidth - init->NominalTimeSeg1;
 	}
+	
+	
+	if (data_speed > 0)
+	{
+		int quanta_data = pclk_freq/data_speed;
+		init->DataPrescaler = 1;
+		init->DataSyncJumpWidth = 1;
+		init->DataTimeSeg1 = quanta_data/2;
+		init->DataTimeSeg2 = quanta_data - init->DataSyncJumpWidth - init->DataTimeSeg1;
+	}
+
+
 	init->StdFiltersNbr = 1;
 	init->ExtFiltersNbr = 1;
 	init->TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
@@ -300,7 +265,7 @@ SCCanStatus SimpleCan_STM32G4xx::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc
 
 
 
-SCCanStatus SimpleCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
+CCStatus ComplexCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
 {
 #if USE_HAL_FDCAN_REGISTER_CALLBACKS
 	// This would make interrupt handling much easier and cleaner.
@@ -314,55 +279,55 @@ SCCanStatus SimpleCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCal
 }
 
 
-SCCanStatus SimpleCan_STM32G4xx::DeactivateNotification()
+CCStatus ComplexCan_STM32G4xx::DeactivateNotification()
 {
 	rx_callback = nullptr;
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_DeactivateNotification(&_hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE));
 }
 
 
-SCCanStatus SimpleCan_STM32G4xx::Start(void)
+CCStatus ComplexCan_STM32G4xx::Start(void)
 {
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_Start(&_hfdcan1));
 }
 
 
-SCCanStatus SimpleCan_STM32G4xx::Stop(void)
+CCStatus ComplexCan_STM32G4xx::Stop(void)
 {
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_Stop(&_hfdcan1));
 }
 
 
 // Specify what to do with non-matching frames.
-SCCanStatus SimpleCan_STM32G4xx::ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt)
+CCStatus ComplexCan_STM32G4xx::ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt)
 {
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_ConfigGlobalFilter(&_hfdcan1, nonMatchingStd, nonMatchingExt, rejectRemoteStd, rejectRemoteExt));
 }
 
 
 // Modify the global filter to reject everything which is not matching the other filters and acceopt all remote frames. 
-SCCanStatus SimpleCan_STM32G4xx::ConfigGlobalFilter()
+CCStatus ComplexCan_STM32G4xx::ConfigGlobalFilter()
 {
 	return ConfigGlobalFilter(FDCAN_REJECT, FDCAN_REJECT, FDCAN_FILTER_REMOTE, FDCAN_FILTER_REMOTE);
 }
 
 
-SCCanStatus SimpleCan_STM32G4xx::ConfigFilter(FilterDefinition *SCFilter)
+CCStatus ComplexCan_STM32G4xx::ConfigFilter(FilterDefinition *SCFilter)
 {
 	// Convert the filter definition
 	FDCAN_FilterTypeDef  STMFilter;
 
-	SCCanStatus rc = SC2STM32_Filter(SCFilter, &STMFilter);
+	CCStatus rc = SC2STM32_Filter(SCFilter, &STMFilter);
 	if (CAN_OK!=rc) return rc;
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_ConfigFilter(&_hfdcan1, &STMFilter));
 }
 
-bool SimpleCan_STM32G4xx::SendNextMessageFromQueue()
+bool ComplexCan_STM32G4xx::SendNextMessageFromQueue()
 {
 	if (TxQueue.get_num_elements())
 	{
 		CanTxMessage *Msg = TxQueue.peek();
-		SCCanStatus status = KickMessage(Msg);
+		CCStatus status = KickMessage(Msg);
 		if (status == CAN_OK)
 		{
 			TxQueue.read(Msg->RemoteFrame ? 0 : Msg->Size);
@@ -377,7 +342,7 @@ bool SimpleCan_STM32G4xx::SendNextMessageFromQueue()
 // and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
 // return payload. The answer to the RTR frame will be received and handled like any other CAN message.
 // So, in principle, no data array is required, but unfortunately the STM32 HAL routines expect it...
-SCCanStatus SimpleCan_STM32G4xx::KickMessage(const CanTxMessage *message)
+CCStatus ComplexCan_STM32G4xx::KickMessage(const CanTxMessage *message)
 {
 	
 	FDCAN_TxHeaderTypeDef TxHeader;
@@ -409,11 +374,11 @@ SCCanStatus SimpleCan_STM32G4xx::KickMessage(const CanTxMessage *message)
 	HAL_StatusTypeDef status = HAL_FDCAN_AddMessageToTxFifoQ(&_hfdcan1, &TxHeader, data_ptr);
 	if (status != HAL_OK)
 	{
-		Serial.printf("SimpleCAN: Failed to send %d bytes, error %d\n", message->Size, status);
+		Serial.printf("ComplexCAN: Failed to send %d bytes, error %d\n", message->Size, status);
 	}
 	return HALSTATUS2CANSTATUS(status);
 }
 
-FDCAN_HandleTypeDef SimpleCan_STM32G4xx::_hfdcan1 = {};
+FDCAN_HandleTypeDef ComplexCan_STM32G4xx::_hfdcan1 = {};
 
 #endif
