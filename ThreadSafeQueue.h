@@ -1,7 +1,7 @@
 #pragma once
 
 
-template <class T, size_t memory_size, size_t max_data_size>
+template <class T, size_t memory_size, size_t max_data_size, bool rx>
 class CircularBuffer
 {
 private:
@@ -69,52 +69,113 @@ public:
 
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32)
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/queue.h"
-#include "freertos/semphr.h"
+#include "freertos/ringbuf.h"
+#include <type_traits>
+#include <array>
 
-template <class T>
+template <class T, size_t memory_size, size_t max_data_size, bool rx>
 class SafeCircularBuffer
 {
-    public:
-        SafeQueue(int Size=16) 
+    RingbufHandle_t buffer_handle;
+    std::array<uint8_t, (sizeof(T) + max_data_size) * rx> write_data;
+    T* read_item_pointer;
+    
+    
+public:
+    SafeCircularBuffer()
+    {
+        if(rx)
         {
-            Queue = xQueueCreate( Size, sizeof( T ) );
-            NumElements = 0;
-            QueueSema = xSemaphoreCreateCounting( 1, 0 );        
+            buffer_handle = xRingbufferCreateNoSplit(sizeof(T) + max_data_size, memory_size/(sizeof(T) + max_data_size));
+            read_item_pointer = nullptr;
         }
+    }
 
-        // Add an element to the queue.
-        // ISR, absolutely no printing to serial!!
-        void Enqueue(T t)
+    T* IRAM_ATTR reserve()
+    {
+        if (rx)
         {
-            xSemaphoreTakeFromISR(QueueSema, 0);
-            xQueueSendFromISR(Queue, &t, 0);
-            NumElements++;
-            xSemaphoreGiveFromISR(QueueSema, 0);
+            return reinterpret_cast<T*>(write_data.data());
         }
-
-        // Get the "front"-element.
-        // If the queue is empty, wait till an element is avaiable.
-        // ISR, absolutely no printing to serial!!
-        bool Dequeue(T* pVal)
+        else
         {
-            xSemaphoreTakeFromISR(QueueSema, 0);
-            if(xQueueReceiveFromISR(Queue, pVal, 0))
-            {
-                NumElements--;
-                xSemaphoreGiveFromISR(QueueSema, 0);
-                return true;
-            }
-            xSemaphoreGiveFromISR(QueueSema, 0);
+            return nullptr;
+        }
+        
+    }
+
+    bool IRAM_ATTR write(size_t data_size)
+    {
+        if (rx)
+        {
+            BaseType_t awoken = pdFALSE;
+            xRingbufferSendFromISR(buffer_handle, write_data.data(), sizeof(T)+ data_size, &awoken);
+            return awoken == pdTRUE;
+        }
+        else
+        {
             return false;
         }
+        
+    }
 
-        int NumElements;
+    T* IRAM_ATTR peek()
+    {
+        if (rx)
+        {
+            size_t item_size;
+            read_item_pointer = reinterpret_cast<T*>(xRingbufferReceive(buffer_handle, &item_size, 0));
+            return read_item_pointer;
+        }
+        else
+        {
+            return nullptr;
+        }
+        
+    }
 
-private:
-  QueueHandle_t Queue;
-  SemaphoreHandle_t QueueSema;
+    bool IRAM_ATTR read(size_t data_size)
+    {
+        if (rx)
+        {
+            vRingbufferReturnItem(buffer_handle, read_item_pointer);
+            return false;
+        }
+        else
+        {
+            return false;
+        }
+        
+    }
+
+    uint8_t get_num_elements() 
+    { 
+        if (rx)
+        {
+            UBaseType_t waiting;
+            vRingbufferGetInfo(buffer_handle, nullptr, nullptr, nullptr, nullptr, &waiting); 
+            return waiting;
+        }
+        else
+        {
+            return 0;
+        }
+        
+        
+    }
+
+    uint16_t get_free() 
+    { 
+        if (rx)
+        {
+            return xRingbufferGetCurFreeSize(buffer_handle);
+        }
+        else
+        {
+            return 0;
+        }
+        
+    }
 };
 
 #endif

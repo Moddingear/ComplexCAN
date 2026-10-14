@@ -10,41 +10,22 @@
 #include <SimpleCAN.h>
 
 uint8_t SimpleCan::rx_overrun = 0;
-CircularBuffer<CanRxMessage, 1024, 64> SimpleCan::RxQueue;
-CircularBuffer<CanTxMessage, 1024, 64> SimpleCan::TxQueue;
+SafeCircularBuffer<CanRxMessage, 1024, 64, true> SimpleCan::RxQueue;
+SafeCircularBuffer<CanTxMessage, 1024, 64, false> SimpleCan::TxQueue;
 
-
-// Set a filter to accept all incoming messages
-SCCanStatus SimpleCan::AcceptAllMessages()
+SCCanStatus SimpleCan::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
 {
-	SCCanStatus rc=CAN_OK;
-	// Configure Rx filter
-	FilterDefinition FilterConfig;
-	FilterConfig.ExtendedID = false;
-	FilterConfig.FilterIndex = 0;
-	FilterConfig.FilterType = CAN_FILTER_MASK;
-	FilterConfig.FilterConfig = CAN_FILTER_TO_RXFIFO0;
-	FilterConfig.FilterID1 = 0x0;
-	FilterConfig.FilterID2 = 0x0;
-	rc = ConfigFilter(&FilterConfig);
-	return rc;
+	rx_callback = callback;
+	rx_callback_param = userData;
+	return CAN_OK;
 }
 
-// Set a filter to deny all incoming messages (except for CAN ID 0xFFFF)
-SCCanStatus SimpleCan::DenyAllMessages()
+SCCanStatus SimpleCan::DeactivateNotification()
 {
-	SCCanStatus rc=CAN_OK;
-	// Configure Rx filter
-	FilterDefinition FilterConfig;
-	FilterConfig.ExtendedID = false;
-	FilterConfig.FilterIndex = 0;
-	FilterConfig.FilterType = CAN_FILTER_MASK;
-	FilterConfig.FilterConfig = CAN_FILTER_TO_RXFIFO0;
-	FilterConfig.FilterID1 = 0xffff;
-	FilterConfig.FilterID2 = 0xffff;
-	rc = ConfigFilter(&FilterConfig);
-	return rc;
+	rx_callback = nullptr;
+	return CAN_OK;
 }
+
 
 bool SimpleCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
@@ -116,7 +97,60 @@ bool SimpleCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bo
 	return true;
 }
 
+// Set a filter to accept all incoming messages
+SCCanStatus SimpleCan::AcceptAllMessages()
+{
+	SCCanStatus rc=CAN_OK;
+	// Configure Rx filter
+	FilterDefinition FilterConfig;
+	FilterConfig.ExtendedID = false;
+	FilterConfig.FilterIndex = 0;
+	FilterConfig.FilterType = CAN_FILTER_MASK;
+	FilterConfig.FilterConfig = CAN_FILTER_TO_RXFIFO0;
+	FilterConfig.FilterID1 = 0x0;
+	FilterConfig.FilterID2 = 0x0;
+	rc = ConfigFilter(&FilterConfig);
+	return rc;
+}
 
+// Set a filter to deny all incoming messages (except for CAN ID 0xFFFF)
+SCCanStatus SimpleCan::DenyAllMessages()
+{
+	SCCanStatus rc=CAN_OK;
+	// Configure Rx filter
+	FilterDefinition FilterConfig;
+	FilterConfig.ExtendedID = false;
+	FilterConfig.FilterIndex = 0;
+	FilterConfig.FilterType = CAN_FILTER_MASK;
+	FilterConfig.FilterConfig = CAN_FILTER_TO_RXFIFO0;
+	FilterConfig.FilterID1 = 0xffff;
+	FilterConfig.FilterID2 = 0xffff;
+	rc = ConfigFilter(&FilterConfig);
+	return rc;
+}
+
+bool SimpleCan::Loop()
+{
+	bool has_unpacked = false;
+	if (RxQueue.get_num_elements()) //has a frame stored on the side
+	{
+		CanRxMessage *Msg = RxQueue.peek();
+		// Serial.println("Read message from buffer");
+		// --- Convert the header and call the user provided RX handler.
+		if (Msg->Error) Serial.println("Dequeue msg with error");
+		rx_callback(Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), rx_callback_param);
+		RxQueue.read(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
+		has_unpacked = true;
+	}
+	if (rx_overrun)
+	{
+		Serial.printf("SimpleCAN RX overrun (%d messages discarded!)\n", rx_overrun);
+		rx_overrun = 0;
+	}
+	return has_unpacked;
+}
+
+#if 0
 //--------------------------------------------------------------------------------------
 // Implementation of the basic recerive handler, which is common for all platforms
 
@@ -124,13 +158,6 @@ RxHandlerBase::RxHandlerBase(uint16_t dataLength)
 {
 	_rxData = new byte[dataLength];
 	_rxDataLength = dataLength;
-}
-
-
-void RxHandlerBase::SetProfileCallback(uint16_t dataLength, RxCallback callback, void* userData)
-{
-	ProfileCallback = callback;
-	ProfileClass = userData;
 }
 
 
@@ -169,147 +196,4 @@ void RxHandlerBase::Notify(/*...*/)
 		}
 	}
 }
-
-bool RxHandlerBase::Loop()
-{
-	bool rc = false;
-
-	// If a callback was registered, convert the header info and call the callback function.
-	if (ProfileCallback != NULL)
-	{
- 		if (SimpleCan::RxQueue.get_num_elements()) //has a frame stored on the side
-		{
-			CanRxMessage *Msg = SimpleCan::RxQueue.peek();
-			// Serial.println("Read message from buffer");
-			// --- Convert the header and call the user provided RX handler.
-			if (Msg->Error) Serial.println("Dequeue msg with error");
-			ProfileCallback(Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), ProfileClass);
-			SimpleCan::RxQueue.read(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
-		}
-		if (SimpleCan::rx_overrun)
-		{
-			Serial.printf("SimpleCAN RX overrun (%d messages discarded!)\n", SimpleCan::rx_overrun);
-			SimpleCan::rx_overrun = 0;
-		}
-		
-	}
-	else 
-	{
-		Serial.println("RxHandlerBase::Loop(): No callback set!");
-	}
-	
-	return rc;
-}
-
-//***********************************************************************
-//***********************************************************************
-//***********************************************************************
-// Profile starts here
-
-// This is the message hadler for the profile!
-static  void HandleCanMessage(const SimpleCanRxHeader rxHeader, const uint8_t *rxData, void* userData)
-{
-    SimpleCANProfile* pClass = (SimpleCANProfile*)userData;
-    pClass->HandleCanMessage(rxHeader, rxData);
-}
-
-
-
-SimpleCANProfile::SimpleCANProfile(SimpleCan* _pCan)
-{
-	Can1 = _pCan;
-}
-
-void SimpleCANProfile::Init(CanIDFilter IDFilterFunc)
-{
-	Serial.println(Can1->Init(SCCanSpeed::Mbit1, IDFilterFunc) == CAN_OK
-		? "CAN: initialized."
-		: "CAN: error when initializing.");
-
-
-	SCCanStatus rc=CAN_OK;
-
-
-	if (rc==CAN_OK) rc = Can1->ConfigGlobalFilter();
-	if (rc==CAN_OK) rc = Can1->AcceptAllMessages();
-	if (rc==CAN_OK) rc = Can1->ActivateNotification(8, ::HandleCanMessage, this);			
-	if (rc!=CAN_OK)	Serial.println("CAN initialization error!");
-
-	if (rc==CAN_OK) Serial.println(Can1->Start() == CAN_OK
-		? "CAN: started."
-		: "CAN: error when starting.");
-}
-
-
-void SimpleCANProfile::CANSendText(const char* Text, const int CanID)
-{
-	Can1->SendMessage((uint8_t*)Text,  strlen(Text), CanID);
-}
-
-
-void SimpleCANProfile::CANSendFloat(const float Val, const int CanID)
-{
-	Can1->SendMessage((uint8_t*)&Val,  sizeof(Val), CanID);
-}
-
-
-void SimpleCANProfile::CANSendFloat(const float Val1, const float Val2, const int CanID)
-{
-    uint8_t Buffer[2*sizeof(float)];
-    memcpy(Buffer, &Val1, sizeof(float));
-    memcpy(Buffer+ sizeof(float), &Val2, sizeof(float));
-	Can1->SendMessage(Buffer,  2*sizeof(float), CanID);
-}
-
-
-void SimpleCANProfile::CANSendInt(const int32_t Val, const int CanID)
-{
-	Can1->SendMessage((uint8_t*)&Val,  sizeof(int), CanID);
-}
-
-
-void SimpleCANProfile::CANSendInt(const int32_t Val1, const int32_t Val2, const int CanID)
-{
-    uint8_t Buffer[2*sizeof(int32_t)];
-    memcpy(Buffer, &Val1, sizeof(int32_t));
-    memcpy(Buffer+ sizeof(int32_t), &Val2, sizeof(int32_t));
-	Can1->SendMessage(Buffer,  2*sizeof(int32_t), CanID);
-}
-
-
-int SimpleCANProfile::CANGetInt(const uint8_t* pData)
-{
-	int Val;
-	memcpy(&Val, pData, sizeof(int));
-	return Val;
-}
-
-
-void SimpleCANProfile::CANGetInt(const uint8_t* pData, int32_t* pInt1, int32_t* pInt2)
-{
-	memcpy(pInt1, pData, sizeof(int));
-	memcpy(pInt2, pData+sizeof(int), sizeof(int));
-}
-
-
-void SimpleCANProfile::CANGetString(const uint8_t* pData, char* pChar, const int MaxLen)
-{
-	memcpy(pChar, pData, MaxLen);
-	pChar[MaxLen]= 0;
-}
-
-
-float SimpleCANProfile::CANGetFloat(const uint8_t* pData)
-{
-	float Val;
-	memcpy(&Val, pData, sizeof(float));
-	return Val;
-}
-
-
-void SimpleCANProfile::CANGetFloat(const uint8_t* pData, float* pVal1, float* pVal2)
-{
-	float Val;
-	memcpy(pVal1, pData, sizeof(float));
-	memcpy(pVal2, pData+sizeof(float), sizeof(float));
-}
+#endif

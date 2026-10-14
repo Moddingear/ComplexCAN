@@ -144,46 +144,10 @@ struct CanRxMessage
 };
 
 
-//--------------------------------------------------------------------------------------
-// Abstract class which must be implemented by a platform specific version.
-
-
-
 // Callback function which should be user supplied and which will be called for each
 // incomming message which passes the filters.
 // The void* is exactly the value which was set as userData when calling ActivateNotification().
 typedef void(*RxCallback)(const SimpleCanRxHeader rxHeader, const uint8_t *rxData, void* userData);
-
-
-// Platform specific implementations must also provide one class derived from RxHandlerBase
-// and implement the methods CANReadFrame() and ReleaseRcvBuffer().
-class RxHandlerBase
-{
-	public:
-		RxHandlerBase(uint16_t dataLength);
-		~RxHandlerBase();
-		void SetProfileCallback(uint16_t dataLength, RxCallback callback, void* userData);
-
-		// This function is called by the actual low level ISR when a new frame is received.
-		// ISR, absolutely no printing to serial!!
-		virtual void Notify();		// Platform dependent!
-		RxCallback ProfileCallback;
-		void* ProfileClass;		// Pointer available for callback routine to do with it whatever it likes.
-
-		// Called for every frame which was received from the CAN bus. 
-		virtual bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen) = 0;
-
-		// Called whenever a frame was read and CANReadFrame() finished or the frame can be discarded otherwise.
-		// Used to signal the hardware that the frame data are not required anymore.
-		virtual void ReleaseRcvBuffer()=0;
-		
-		bool Loop();
-
-		uint8_t *_rxData;
-		uint16_t _rxDataLength;
-		uint8_t RxErrorFlag;
-};
-
 
 // Pointer to function which returns true when a CAN ID is valid and false if any commands send to it shall be ignored.
 typedef bool (*CanIDFilter) (int CanID);		
@@ -203,8 +167,8 @@ class SimpleCan
 		// Register/deregister a callback function for message received events.
 		// The notification handler is platform specific, that is why it's needed here.
 		// These functions may be overloaded if required.
-		virtual SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)=0;
-		virtual SCCanStatus DeactivateNotification()=0;
+		virtual SCCanStatus ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData);
+		virtual SCCanStatus DeactivateNotification();
 
 		// Start and stop all activities. Changing acceptance filters requires stop()
 		// before doing so on some platforms.
@@ -250,7 +214,7 @@ class SimpleCan
 		virtual int GetOtherErrors() {return -1;};
 
 		// If a message is waiting in the queue, then get it and dispatch it.
-		virtual bool Loop()=0;
+		virtual bool Loop();
 
 		// Read the status of the device. Result is platform depending.
 		// NOTE: Str must be 0 or have space for at least MAX_STATUS_STR_LEN chars. 
@@ -266,9 +230,11 @@ class SimpleCan
 		void EnableRx () {DoNotReceive=false;};
 
 		static uint8_t rx_overrun;
-		static CircularBuffer<CanRxMessage, 1024, 64> RxQueue;
-		static CircularBuffer<CanTxMessage, 1024, 64> TxQueue;
-	private:
+		static SafeCircularBuffer<CanRxMessage, 1024, 64, true> RxQueue;
+		static SafeCircularBuffer<CanTxMessage, 1024, 64, false> TxQueue;
+	protected:
+		RxCallback rx_callback;
+		void* rx_callback_param;
 		bool DoNotSend;
 		bool DoNotReceive;
 };
@@ -277,33 +243,3 @@ class SimpleCan
 // Class factory which creates a SimpleCan object for the correct platform.
 // There must be exactly one such function available.
 SimpleCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx);
-
-
-//*******************************************************************************************************
-//*****    Helper class to simplify implementation of profiles   ****************************************
-//*****    ** Usage is optional! **                              ****************************************
-//*******************************************************************************************************
-
-
-// Every CAN profile must be derived from this classd and at least implement HandleCanMessage().
-// HandleCanMessage() will be called for every received CAN message.
-class SimpleCANProfile
-{
-    public:
-		// This is, where you finaly receive the CAN messages in your own code!
-        virtual void HandleCanMessage(const SimpleCanRxHeader rxHeader, const uint8_t *rxData)=0;
-
-        SimpleCANProfile(SimpleCan* pCan);
-        virtual void  Init(CanIDFilter IDFilterFunc=0);
-        virtual void  CANSendText(const char* Text, const int CanID);
-        virtual void  CANSendFloat(const float Val1, const int CanID);
-        virtual void  CANSendFloat(const float Val1, const float Val2, const int CanID);
-        virtual void  CANSendInt(const int32_t Val, const int CanID);
-		virtual void  CANSendInt(const int32_t Val1, const int32_t Val2, const int CanID);
-        virtual float CANGetFloat(const uint8_t* pData);
-        virtual int   CANGetInt(const uint8_t* pData);
-		virtual void  CANGetInt(const uint8_t* pData, int32_t* pInt1, int32_t* pInt2);
-        virtual void  CANGetFloat(const uint8_t* pData, float* pf1, float* pf2);
-        virtual void  CANGetString(const uint8_t* pData, char* pChar, int MaxLen);      
-        SimpleCan* Can1;     
-};

@@ -2,18 +2,6 @@
 
 #include <SimpleCAN.h>
 
-class RxHandlerSTM32 : public RxHandlerBase
-{
-	public:
-		// Note: The constructor here is a must in order to initialize the base class. 
-		RxHandlerSTM32(uint16_t dataLength) : RxHandlerBase(dataLength) {};
-		bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen);		
- 		void ReleaseRcvBuffer();		
-
-	private:
-		FDCAN_RxHeaderTypeDef _rxHeader;
-};
-
 
 class SimpleCan_STM32G4xx : public SimpleCan
 {
@@ -54,13 +42,8 @@ class SimpleCan_STM32G4xx : public SimpleCan
 
 		//*******************************************************
 		//*** Other methods ************
-		
-		bool Loop();
 
 		static FDCAN_HandleTypeDef _hfdcan1;
-
-		static RxHandlerSTM32 *RxHandlerP;		
-
 	private:
 		static CanIDFilter SendIDFilterFunc;
 };

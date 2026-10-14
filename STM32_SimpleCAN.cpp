@@ -46,7 +46,6 @@
 
 #if defined(STM32G4xx)
 #include <Arduino.h>
-#include <ThreadSafeQueue.h>
 #include <STM32_SimpleCAN.h>
 
 // #define STM32G4xx
@@ -59,17 +58,14 @@ extern "C" void FDCAN1_IT0_IRQHandler(void)
 	HAL_FDCAN_IRQHandler(&SimpleCan_STM32G4xx::_hfdcan1);
 }
 
+void OnReceivedMessage();
 
 extern "C" void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
 	// Serial.println("cb");
 	if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
 	{
-		if (SimpleCan_STM32G4xx::RxHandlerP == NULL)
-		{
-			return;
-		}
-		SimpleCan_STM32G4xx::RxHandlerP->Notify();			// handle!!
+		OnReceivedMessage();
 	}
 }
 
@@ -188,9 +184,6 @@ SCCanStatus SC2STM32_Filter(FilterDefinition *SCFilter, FDCAN_FilterTypeDef*  ST
 
 CanIDFilter SimpleCan_STM32G4xx::SendIDFilterFunc;
 
-static RxHandlerSTM32 Can1RxHandler(8);					// Preferably this should be allocated by the HAL, just paramterized here!
-RxHandlerSTM32* SimpleCan_STM32G4xx::RxHandlerP=nullptr;	// Presumably this must be static because of IRQs????
-
 
 SimpleCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx)
 {
@@ -202,38 +195,53 @@ SimpleCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx)
 static const uint8_t DLCtoBytes[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64};
 
 // Copy max _rxDataLength bytes from received frame to _rxData. 
-bool RxHandlerSTM32::CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
+bool CANReadFrame(SimpleCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
 {
-	HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(&SimpleCan_STM32G4xx::_hfdcan1, FDCAN_RX_FIFO0, &_rxHeader, pData);
+	FDCAN_RxHeaderTypeDef rx_header;
+	HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(&SimpleCan_STM32G4xx::_hfdcan1, FDCAN_RX_FIFO0, &rx_header, pData);
 	if (status != HAL_OK)		//!!! Data length not checked!!!
 	{
 		Serial.printf("SimpleCAN error on HAL_FDCAN_GetRxMessage: %d\n", status);
 		return false;
 	}
+	// Convert the header
+	SCHeader->Identifier = rx_header.Identifier;
+	SCHeader->DataLength = DLCtoBytes[rx_header.DataLength];			
+	SCHeader->RxTimestamp = rx_header.RxTimestamp;
+	SCHeader->FilterIndex = rx_header.FilterIndex;
+	SCHeader->IsFilterMatchingFrame = rx_header.IsFilterMatchingFrame;
 
-	if (ProfileCallback != NULL)
-	{
-		// Convert the header
-		SCHeader->Identifier = _rxHeader.Identifier;
-		SCHeader->DataLength = DLCtoBytes[_rxHeader.DataLength];			
-		SCHeader->RxTimestamp = _rxHeader.RxTimestamp;
-		SCHeader->FilterIndex = _rxHeader.FilterIndex;
-		SCHeader->IsFilterMatchingFrame = _rxHeader.IsFilterMatchingFrame;
-
-		SCHeader->ExtendedID = _rxHeader.IdType==FDCAN_EXTENDED_ID;
-		SCHeader->FDCANFrame = _rxHeader.FDFormat==FDCAN_FD_CAN;
-		SCHeader->RemoteFrame = _rxHeader.RxFrameType==FDCAN_REMOTE_FRAME;
-	}
-	else return false;
+	SCHeader->ExtendedID = rx_header.IdType==FDCAN_EXTENDED_ID;
+	SCHeader->FDCANFrame = rx_header.FDFormat==FDCAN_FD_CAN;
+	SCHeader->RemoteFrame = rx_header.RxFrameType==FDCAN_REMOTE_FRAME;
 
 	return true;
 }
 
-
-// Let the hardware know the frame has been read.
-void RxHandlerSTM32::ReleaseRcvBuffer()
+void OnReceivedMessage()
 {
-	// Nothing to do for STM32;	
+	CanRxMessage *Msg;
+	bool overrun = false;
+	if (SimpleCan::RxQueue.get_free() > sizeof(CanRxMessage) + 64)
+	{
+		Msg = SimpleCan::RxQueue.reserve();
+	}
+	else
+	{
+		SimpleCan::rx_overrun++;
+		overrun = true;
+		Msg = reinterpret_cast<CanRxMessage*>(alloca(sizeof(CanRxMessage) + 64));
+	}
+	
+
+    // Copy the received message into the _rxData buffer
+	if (CANReadFrame(&Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), 64))
+	{
+		if (!overrun)
+		{
+			SimpleCan::RxQueue.write(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
+		}
+	}
 }
 
 
@@ -294,17 +302,13 @@ SCCanStatus SimpleCan_STM32G4xx::Init(SCCanSpeed speed, CanIDFilter IDFilterFunc
 
 SCCanStatus SimpleCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
 {
-	if (RxHandlerP != NULL)
-	{
-		return HALSTATUS2CANSTATUS(HAL_ERROR);
-	}
 #if USE_HAL_FDCAN_REGISTER_CALLBACKS
 	// This would make interrupt handling much easier and cleaner.
 	// But how to activate it on Arduino platform?
 	//_hfdcan1.Instance->RxFifo0Callback = ...;
 #endif
-	RxHandlerP = &Can1RxHandler;
-	RxHandlerP->SetProfileCallback(dataLength, callback, userData);
+	rx_callback = callback;
+	rx_callback_param = userData;
 	Serial.println("CAN: notifications activated");
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_ActivateNotification(&_hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER0));
 }
@@ -312,7 +316,7 @@ SCCanStatus SimpleCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCal
 
 SCCanStatus SimpleCan_STM32G4xx::DeactivateNotification()
 {
-	RxHandlerP = NULL;
+	rx_callback = nullptr;
 	return HALSTATUS2CANSTATUS(HAL_FDCAN_DeactivateNotification(&_hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE));
 }
 
@@ -408,12 +412,6 @@ SCCanStatus SimpleCan_STM32G4xx::KickMessage(const CanTxMessage *message)
 		Serial.printf("SimpleCAN: Failed to send %d bytes, error %d\n", message->Size, status);
 	}
 	return HALSTATUS2CANSTATUS(status);
-}
-
-
-bool SimpleCan_STM32G4xx::Loop()
-{
-	return RxHandlerP->Loop();
 }
 
 FDCAN_HandleTypeDef SimpleCan_STM32G4xx::_hfdcan1 = {};
