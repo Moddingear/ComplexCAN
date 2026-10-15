@@ -42,8 +42,6 @@ class ComplexCan_ESP32 : public ComplexCan
 		int GetRxErrors(); 
 		int GetOtherErrors();
 		CCStatus GetStatus(uint32_t* Status, char* Str);
-
-		static int CANBusErrors;
 		
 		twai_node_handle_t can_handle = nullptr;     
 

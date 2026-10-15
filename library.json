@@ -1,0 +1,20 @@
+{
+  "name": "ComplexCAN",
+  "version": "1.0.0",
+  "description": "A cross-platform library for FDCAN communication",
+  "keywords": "FDCAN, CANbus, CAN2.0, communication, stm32, esp32",
+  "repository":
+  {
+    "type": "git",
+    "url": "https://github.com/Moddingear/ComplexCAN.git"
+  },
+  "authors":
+  [
+    {
+      "name": "Moddingear"
+    }
+  ],
+  "license": "MIT",
+  "frameworks": "arduino",
+  "platforms": "espressif32, stm32"
+}

@@ -55,16 +55,10 @@ static bool IRAM_ATTR twai_on_state_change_callback(twai_node_handle_t handle, c
 	return false;
 }
 
-// static members
-int ComplexCan_ESP32::CANBusErrors;
-
-
 ComplexCan_ESP32::ComplexCan_ESP32(uint32_t _TxPin, uint32_t _RxPin) : ComplexCan(_TxPin, _RxPin)
 {
     RxPin = (gpio_num_t)_RxPin;
     TxPin = (gpio_num_t)_TxPin;
-	
-	CANBusErrors = 0;
 }
 
 CCStatus ComplexCan_ESP32::Start(void)
@@ -191,7 +185,7 @@ int ComplexCan_ESP32::GetRxErrors()
 
 int ComplexCan_ESP32::GetOtherErrors() 
 {
-	return CANBusErrors;
+	return 0;
 }
 
 CCStatus ComplexCan_ESP32::GetStatus(uint32_t* Status, char* Str) 
