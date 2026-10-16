@@ -110,7 +110,7 @@ struct CanRxMessage
 // Callback function which should be user supplied and which will be called for each
 // incomming message which passes the filters.
 // The void* is exactly the value which was set as userData when calling ActivateNotification().
-typedef void(*RxCallback)(const ComplexCanRxHeader rxHeader, const uint8_t *rxData, void* userData);
+typedef void(*RxCallback)(const ComplexCanRxHeader &rxHeader, const uint8_t *rxData, void* userData);
 
 // Pointer to function which returns true when a CAN ID is valid and false if any commands send to it shall be ignored.
 typedef bool (*CanIDFilter) (int CanID);		

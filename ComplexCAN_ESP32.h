@@ -2,7 +2,7 @@
 #pragma once
 
 #include <ComplexCAN.h>
-
+#include <esp_twai_types.h>
 
 class ComplexCan_ESP32 : public ComplexCan
 {

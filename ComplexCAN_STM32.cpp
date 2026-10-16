@@ -1,5 +1,5 @@
 
-#if defined(STM32G4xx)
+#if defined(ARDUINO_ARCH_STM32)
 #include <Arduino.h>
 #include <ComplexCAN_STM32.h>
 

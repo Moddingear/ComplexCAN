@@ -13,6 +13,14 @@ uint8_t ComplexCan::rx_overrun = 0;
 SafeCircularBuffer<CanRxMessage, 1024, 64, true> ComplexCan::RxQueue;
 SafeCircularBuffer<CanTxMessage, 1024, 64, false> ComplexCan::TxQueue;
 
+#if defined(COMPLEXCAN_NO_PRINTF)
+	#define PRINTF //
+#elif defined(ARDUINO_ARCH_STM32)
+	#define PRINTF Serial.printf
+#elif defined(ARDUINO_ARCH_ESP32)
+	#define PRINTF printf
+#endif
+
 CCStatus ComplexCan::ActivateNotification(RxCallback callback, void* userData)
 {
 	rx_callback = callback;
@@ -38,7 +46,7 @@ bool ComplexCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t Ca
 
 	if (TxQueue.get_free()<sizeof(CanTxMessage)+NumBytes)
 	{
-		Serial.println("CAN Error: Tx buffer overrun");
+		//Serial.println("CAN Error: Tx buffer overrun");
 		
 		// Kick sending of messages from buffer anyway.
 		TriggerSending();
@@ -76,7 +84,7 @@ bool ComplexCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, b
 
 	if (TxQueue.get_free()<sizeof(CanTxMessage))
 	{
-		Serial.println("CAN Error: Tx buffer overrun");
+		//Serial.println("CAN Error: Tx buffer overrun");
 		
 		// Kick sending of messages from buffer anyway.
 		TriggerSending();
@@ -137,14 +145,25 @@ bool ComplexCan::Loop()
 		CanRxMessage *Msg = RxQueue.peek();
 		// Serial.println("Read message from buffer");
 		// --- Convert the header and call the user provided RX handler.
-		if (Msg->Error) Serial.println("Dequeue msg with error");
-		rx_callback(Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), rx_callback_param);
+		if (Msg->Error) PRINTF("Dequeue msg with error %d\n", Msg->Error);
+		//printf("ComplexCAN received message from %d length %d\n", Msg->SCHeader.Identifier, Msg->SCHeader.DataLength);
+		ComplexCanRxHeader header = Msg->SCHeader; //need to copy to avoid stack poopdown
+		if (rx_callback)
+		{
+			rx_callback(header, reinterpret_cast<uint8_t*>(&Msg[1]), rx_callback_param);
+		}
+		else
+		{
+			PRINTF("ComplexCAN is missing a receive callback\n");
+		}
+		
+		
 		RxQueue.read(Msg->SCHeader.RemoteFrame ? 0 : Msg->SCHeader.DataLength);
 		has_unpacked = true;
 	}
 	if (rx_overrun)
 	{
-		Serial.printf("ComplexCAN RX overrun (%d messages discarded!)\n", rx_overrun);
+		PRINTF("ComplexCAN RX overrun (%d messages discarded!)\n", rx_overrun);
 		rx_overrun = 0;
 	}
 	return has_unpacked;

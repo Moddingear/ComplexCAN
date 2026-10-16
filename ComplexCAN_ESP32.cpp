@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 
-#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32)
+#if defined(ARDUINO_ARCH_ESP32)
 
 #include <esp_twai.h>
 #include <esp_twai_onchip.h>
@@ -31,6 +31,7 @@ static IRAM_ATTR bool twai_rx_callback(twai_node_handle_t handle, const twai_rx_
 	scanmsg->SCHeader.RemoteFrame = message.header.rtr;
 	scanmsg->SCHeader.RxTimestamp = message.header.timestamp;
 	scanmsg->Error = message.header.esi;
+	//ets_printf("CAN received message from %d length %d\n", message.header.id, message.header.dlc);
 	return ComplexCan::RxQueue.write(scanmsg->SCHeader.DataLength);
 }
 
@@ -149,9 +150,18 @@ bool ComplexCan_ESP32::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint3
 	};
 	frame.header.ide = UseEFF;
 	frame.header.rtr = false;
+	#if SOC_TWAI_SUPPORT_FD
 	frame.header.fdf = UseFDCAN || NumBytes > 8;
 	frame.header.brs = true;
+	#else 
+	frame.header.fdf = false;
+	frame.header.brs = false;
+	#endif
 	frame.header.esi = false;
+	if (NumBytes > TWAI_FRAME_MAX_LEN)
+	{
+		printf("ComplexCAN warning: trying to send too many bytes!\n");
+	}
 	return twai_node_transmit(can_handle, &frame, 0) == ESP_OK;
 }
 
@@ -167,8 +177,13 @@ bool ComplexCan_ESP32::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool Use
 	};
 	frame.header.ide = UseEFF;
 	frame.header.rtr = true;
+	#if SOC_TWAI_SUPPORT_FD
 	frame.header.fdf = UseFDCAN || NumBytes > 8;
 	frame.header.brs = true;
+	#else 
+	frame.header.fdf = false;
+	frame.header.brs = false;
+	#endif
 	frame.header.esi = false;
 	return twai_node_transmit(can_handle, &frame, 0) == ESP_OK;
 }
