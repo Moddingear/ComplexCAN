@@ -46,7 +46,7 @@ bool ComplexCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t Ca
 
 	if (TxQueue.get_free()<sizeof(CanTxMessage)+NumBytes)
 	{
-		//Serial.println("CAN Error: Tx buffer overrun");
+		PRINTF("CAN Error: Tx buffer overrun\n");
 		
 		// Kick sending of messages from buffer anyway.
 		TriggerSending();
@@ -84,7 +84,7 @@ bool ComplexCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, b
 
 	if (TxQueue.get_free()<sizeof(CanTxMessage))
 	{
-		//Serial.println("CAN Error: Tx buffer overrun");
+		PRINTF("CAN Error: Tx buffer overrun");
 		
 		// Kick sending of messages from buffer anyway.
 		TriggerSending();
