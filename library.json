@@ -1,6 +1,6 @@
 {
   "name": "ComplexCAN",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A cross-platform library for FDCAN communication",
   "keywords": "FDCAN, CANbus, CAN2.0, communication, stm32, esp32",
   "repository":

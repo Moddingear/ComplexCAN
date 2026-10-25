@@ -25,7 +25,7 @@ public:
     // Get a pointer to write to
     T* reserve()
     {
-        if (writeptr+get_max_slots() > memory_size)
+        if (writeptr+get_max_slots() > memory_size / sizeof(unsigned int))
         {
             return reinterpret_cast<T*>(buffer);
         }
@@ -35,7 +35,7 @@ public:
     // Advance write pointer (after reserve)
     void write(size_t data_size)
     {
-        if (writeptr+get_max_slots() > memory_size)
+        if (writeptr+get_max_slots() > memory_size / sizeof(unsigned int))
         {
             writeptr = 0;
         }
@@ -57,7 +57,7 @@ public:
         size_t elem_size = get_num_slots(data_size);
         readptr += elem_size;
         free_mem += elem_size;
-        if (readptr + get_max_slots() > memory_size)
+        if (readptr + get_max_slots() > memory_size / sizeof(unsigned int))
         {
             readptr = 0;
         }
