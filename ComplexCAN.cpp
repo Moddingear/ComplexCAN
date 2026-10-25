@@ -147,10 +147,9 @@ bool ComplexCan::Loop()
 		// --- Convert the header and call the user provided RX handler.
 		if (Msg->Error) PRINTF("Dequeue msg with error %d\n", Msg->Error);
 		//printf("ComplexCAN received message from %d length %d\n", Msg->SCHeader.Identifier, Msg->SCHeader.DataLength);
-		ComplexCanRxHeader header = Msg->SCHeader; //need to copy to avoid stack poopdown
 		if (rx_callback)
 		{
-			rx_callback(header, reinterpret_cast<uint8_t*>(&Msg[1]), rx_callback_param);
+			rx_callback(Msg->SCHeader, reinterpret_cast<uint8_t*>(&Msg[1]), rx_callback_param);
 		}
 		else
 		{
