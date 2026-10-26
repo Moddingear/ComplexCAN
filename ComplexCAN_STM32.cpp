@@ -2,25 +2,89 @@
 #if defined(ARDUINO_ARCH_STM32)
 #include <Arduino.h>
 #include <ComplexCAN_STM32.h>
-
-// #define STM32G4xx
-
+#include <HardwareTimer.h>
 
 #define HALSTATUS2CANSTATUS(s) (static_cast<CCStatus>(s))
 
+
+
+#ifdef STM32G4
+#ifdef FDCAN1
+ComplexCan_STM32::ComplexCANInstance fdcan1_inst;
 extern "C" void FDCAN1_IT0_IRQHandler(void)
 {
-	HAL_FDCAN_IRQHandler(&ComplexCan_STM32G4xx::_hfdcan1);
+	HAL_FDCAN_IRQHandler(&fdcan1_inst.fdcan_handle);
 }
+#endif
+#ifdef FDCAN2
+ComplexCan_STM32::ComplexCANInstance fdcan2_inst;
+extern "C" void FDCAN2_IT0_IRQHandler(void)
+{
+	HAL_FDCAN_IRQHandler(&fdcan2_inst.fdcan_handle);
+}
+#endif
+#ifdef FDCAN3
+ComplexCan_STM32::ComplexCANInstance fdcan3_inst;
+extern "C" void FDCAN3_IT0_IRQHandler(void)
+{
+	HAL_FDCAN_IRQHandler(&fdcan3_inst.fdcan_handle);
+}
+#endif
+#define IRQ_HANDLER_DEFINED
+#endif //STM32G4
 
-void OnReceivedMessage();
+//STM32G0(b/c)1
+#ifdef STM32G0
+#ifdef FDCAN1
+ComplexCan_STM32::ComplexCANInstance fdcan1_inst;
+#if !defined(HAL_TIM_MODULE_ONLY)
+FDCAN_HandleTypeDef *phfdcan1 = &fdcan1_inst.fdcan_handle;
+#endif
+#endif
+#ifdef FDCAN2
+ComplexCan_STM32::ComplexCANInstance fdcan2_inst;
+#if !defined(HAL_TIM_MODULE_ONLY)
+FDCAN_HandleTypeDef *phfdcan2 = &fdcan1_inst.fdcan_handle;
+#endif
+#endif
+#if defined(HAL_TIM_MODULE_ONLY)
+extern "C" void TIM16_FDCAN_IT0_IRQHandler(void)
+{
+	#ifdef FDCAN1
+	if (fdcan1_inst.fdcan_handle.Instance->IR)
+	{
+		HAL_FDCAN_IRQHandler(&fdcan1_inst.fdcan_handle);
+	}
+	#endif
+	#ifdef FDCAN2
+	if (fdcan2_inst.fdcan_handle.Instance->IR)
+	{
+		HAL_FDCAN_IRQHandler(&fdcan2_inst.fdcan_handle);
+	}
+	#endif
+}
+#endif
+#define IRQ_HANDLER_DEFINED
+#endif
+
+
+#ifndef IRQ_HANDLER_DEFINED
+#error "ComplexCAN: No IRQ handler defined!"
+#endif
+
+constexpr ComplexCan_STM32::ComplexCANInstance* get_instance(FDCAN_HandleTypeDef *hfdcan)
+{
+	uintptr_t location = reinterpret_cast<uintptr_t>(hfdcan);
+	//yes, this is overkill. Don't care + it gets compiled away.
+	return reinterpret_cast<ComplexCan_STM32::ComplexCANInstance*>(location - offsetof(ComplexCan_STM32::ComplexCANInstance, fdcan_handle));
+}
 
 extern "C" void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 {
 	// Serial.println("cb");
 	if ((RxFifo0ITs & FDCAN_IT_RX_FIFO0_NEW_MESSAGE) != RESET)
 	{
-		OnReceivedMessage();
+		get_instance(hfdcan)->instance_pointer->OnReceivedMessage();
 	}
 }
 
@@ -29,7 +93,7 @@ extern "C" void HAL_FDCAN_TxBufferCompleteCallback(FDCAN_HandleTypeDef *hfdcan, 
 {
 	// If there are still data in the TxQueue, shuffle them to the HAL Tx queue
 	// Serial.println("HAL_FDCAN_TxBufferCompleteCallback");
-	ComplexCan_STM32G4xx::SendNextMessageFromQueue();
+	get_instance(hfdcan)->instance_pointer->SendNextMessageFromQueue();
 }
 
 void ArduinoPinToHAL(uint32_t APin, uint32_t* HALPin, GPIO_TypeDef** HALPort)
@@ -39,19 +103,16 @@ void ArduinoPinToHAL(uint32_t APin, uint32_t* HALPin, GPIO_TypeDef** HALPort)
 	*HALPin  = STM_LL_GPIO_PIN(Pin);
 }
 
-// Pin numbers used for the FDCAN1 device are global, since they are required by a callback
-// function from the HAL which has no access to the classes :-(.
-uint32_t PinCANRx=-1;
-uint32_t PinCANTx=-1;
-
 // Note: This is a weakly bound callback from the HAL. 
-// The only connection to SimplCanLib is through global variables (if required).
 extern "C" void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 {
-	if (hfdcan == NULL || hfdcan->Instance != FDCAN1)
+	if (hfdcan == nullptr)
 	{
 		return;
 	}
+	ComplexCan_STM32 *complexcan_instance = get_instance(hfdcan)->instance_pointer;
+
+	//Serial.printf("MSPInit of %p\n", complexcan_instance);
 
 	RCC_PeriphCLKInitTypeDef periphClkInit = { };
 	
@@ -68,37 +129,70 @@ extern "C" void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 	
 	// Peripheral clock enable
 	__HAL_RCC_FDCAN_CLK_ENABLE();
-
-	__HAL_RCC_GPIOA_CLK_ENABLE();
-	__HAL_RCC_GPIOB_CLK_ENABLE();
 	
 	// FDCAN1 GPIO Configuration
 	// PA11 ------> FDCAN1_RX
-	uint32_t Pin;
-	GPIO_TypeDef*    Port;
 	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
-
-	ArduinoPinToHAL(PinCANRx, &Pin, &Port);
-	GPIO_InitStruct.Pin = Pin;
+	
+	
+	GPIO_InitStruct.Pin = STM_LL_GPIO_PIN(complexcan_instance->RXPin);
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStruct.Alternate = GPIO_AF9_FDCAN1;
-	HAL_GPIO_Init(Port, &GPIO_InitStruct);
+	GPIO_InitStruct.Alternate = complexcan_instance->rx_af;
+	HAL_GPIO_Init(get_GPIO_Port(STM_PORT(complexcan_instance->RXPin)), &GPIO_InitStruct);
 
 	// PB9/PA12 ------> FDCAN1_TX 
-	ArduinoPinToHAL(PinCANTx, &Pin, &Port);
-	GPIO_InitStruct.Pin = Pin;
+	GPIO_InitStruct.Pin = STM_LL_GPIO_PIN(complexcan_instance->TXPin);
 	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
 	GPIO_InitStruct.Pull = GPIO_NOPULL;
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStruct.Alternate = GPIO_AF9_FDCAN1;
-	HAL_GPIO_Init(Port, &GPIO_InitStruct);
+	GPIO_InitStruct.Alternate = complexcan_instance->tx_af;
+	HAL_GPIO_Init(get_GPIO_Port(STM_PORT(complexcan_instance->TXPin)), &GPIO_InitStruct);
 
 
 	// FDCAN1 interrupt Init
-	HAL_NVIC_SetPriority(FDCAN1_IT0_IRQn, 0, 0);
-	HAL_NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
+	switch (reinterpret_cast<uintptr_t>(hfdcan->Instance))
+	{
+	#ifdef STM32G4
+	#if defined(FDCAN1)
+	case FDCAN1_BASE:
+		HAL_NVIC_SetPriority(FDCAN1_IT0_IRQn, 0, 0);
+		HAL_NVIC_EnableIRQ(FDCAN1_IT0_IRQn);
+		break;
+	#endif
+	#if defined(FDCAN2)
+	case FDCAN2_BASE:
+		HAL_NVIC_SetPriority(FDCAN2_IT0_IRQn, 0, 0);
+		HAL_NVIC_EnableIRQ(FDCAN2_IT0_IRQn);
+		break;
+	#endif
+	#if defined(FDCAN3)
+	case FDCAN3_BASE:
+		HAL_NVIC_SetPriority(FDCAN3_IT0_IRQn, 0, 0);
+		HAL_NVIC_EnableIRQ(FDCAN3_IT0_IRQn);
+		break;
+	#endif
+	#endif
+	#ifdef STM32G0
+	#if defined(FDCAN1)
+	case FDCAN1_BASE:
+		HAL_NVIC_SetPriority(TIM16_FDCAN_IT0_IRQn, 0, 0);
+		HAL_NVIC_EnableIRQ(TIM16_FDCAN_IT0_IRQn);
+		break;
+	#endif
+	#if defined(FDCAN2)
+	case FDCAN2_BASE:
+		HAL_NVIC_SetPriority(TIM16_FDCAN_IT0_IRQn, 0, 0);
+		HAL_NVIC_EnableIRQ(TIM16_FDCAN_IT0_IRQn);
+		break;
+	#endif
+	#endif
+
+	default:
+		Serial.printf("ERROR: FDCAN instance not handled!\n");
+		break;
+	}
 }
 
 
@@ -133,27 +227,13 @@ CCStatus SC2STM32_Filter(FilterDefinition *SCFilter, FDCAN_FilterTypeDef*  STMFi
 	return CAN_OK;
 }
 
-
-
-
-
-CanIDFilter ComplexCan_STM32G4xx::SendIDFilterFunc;
-
-
-ComplexCan* CreateCanLib(uint32_t PinTx, uint32_t PinRx)
-{
-	return new ComplexCan_STM32G4xx(PinTx, PinRx);
-}
-
-
-
 static const uint8_t DLCtoBytes[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 12, 16, 20, 24, 32, 48, 64};
 
 // Copy max _rxDataLength bytes from received frame to _rxData. 
-bool CANReadFrame(ComplexCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
+bool ComplexCan_STM32::CANReadFrame(ComplexCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
 {
 	FDCAN_RxHeaderTypeDef rx_header;
-	HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(&ComplexCan_STM32G4xx::_hfdcan1, FDCAN_RX_FIFO0, &rx_header, pData);
+	HAL_StatusTypeDef status = HAL_FDCAN_GetRxMessage(&instance->fdcan_handle, FDCAN_RX_FIFO0, &rx_header, pData);
 	if (status != HAL_OK)		//!!! Data length not checked!!!
 	{
 		Serial.printf("ComplexCAN error on HAL_FDCAN_GetRxMessage: %d\n", status);
@@ -173,7 +253,7 @@ bool CANReadFrame(ComplexCanRxHeader* SCHeader, uint8_t* pData, int MaxDataLen)
 	return true;
 }
 
-void OnReceivedMessage()
+void ComplexCan_STM32::OnReceivedMessage()
 {
 	CanRxMessage *Msg;
 	bool overrun = false;
@@ -200,27 +280,46 @@ void OnReceivedMessage()
 }
 
 
-ComplexCan_STM32G4xx::ComplexCan_STM32G4xx(uint32_t PinTx, uint32_t PinRx) : ComplexCan(PinTx, PinRx)
+ComplexCan_STM32::ComplexCan_STM32(PinName PinTx, PinName PinRx, FDCAN_GlobalTypeDef* instance, uint8_t in_tx_af, uint8_t in_rx_af)
+	: ComplexCan(), RXPin(PinRx), TXPin(PinTx), rx_af(in_rx_af), tx_af(in_tx_af)
 {
-	if (_hfdcan1.Instance != NULL)
+	switch (reinterpret_cast<uintptr_t>(instance))
+	{
+	#if defined(FDCAN1)
+	case FDCAN1_BASE:
+		this->instance = &fdcan1_inst;
+		fdcan1_inst.fdcan_handle.Instance = FDCAN1;
+		break;
+	#endif
+	#if defined(FDCAN2)
+	case FDCAN2_BASE:
+		this->instance = &fdcan2_inst;
+		fdcan1_inst.fdcan_handle.Instance = FDCAN2;
+		break;
+	#endif
+	#if defined(FDCAN3)
+	case FDCAN3_BASE:
+		this->instance = &fdcan3_inst;
+		fdcan1_inst.fdcan_handle.Instance = FDCAN3;
+		break;
+	#endif
+
+	default:
+		Serial.println("ComplexCAN: CAN instance not supported!");
+		return;
+	}
+	if (this->instance->instance_pointer != NULL)
 	{
 		Serial.println("ComplexCAN: CAN instance already used!");
 	}
-
-	_hfdcan1.Instance = FDCAN1;
-
-	PinCANRx = PinRx;
-	PinCANTx = PinTx;
-	SendIDFilterFunc = 0;
+	this->instance->instance_pointer = this;
 }
 
-CCStatus ComplexCan_STM32G4xx::Init(uint32_t arbitration_speed, uint32_t data_speed, CanIDFilter IDFilterFunc)
+CCStatus ComplexCan_STM32::Init(uint32_t arbitration_speed, uint32_t data_speed)
 {
-	Serial.println("ComplexCan_STM32G4xx::Init()");
+	//Serial.printf("ComplexCan_STM32::Init() %p\n", this);
 
-	if (IDFilterFunc) SendIDFilterFunc = IDFilterFunc;
-
-	FDCAN_InitTypeDef *init = &_hfdcan1.Init;
+	FDCAN_InitTypeDef *init = &instance->fdcan_handle.Init;
 	
 	init->ClockDivider = FDCAN_CLOCK_DIV1;
 	init->FrameFormat = FDCAN_FRAME_FD_BRS;
@@ -260,12 +359,12 @@ CCStatus ComplexCan_STM32G4xx::Init(uint32_t arbitration_speed, uint32_t data_sp
 	init->ExtFiltersNbr = 1;
 	init->TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
 
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_Init(&_hfdcan1));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_Init(&instance->fdcan_handle));
 }
 
 
 
-CCStatus ComplexCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
+CCStatus ComplexCan_STM32::ActivateNotification(uint16_t dataLength, RxCallback callback, void* userData)
 {
 #if USE_HAL_FDCAN_REGISTER_CALLBACKS
 	// This would make interrupt handling much easier and cleaner.
@@ -275,54 +374,54 @@ CCStatus ComplexCan_STM32G4xx::ActivateNotification(uint16_t dataLength, RxCallb
 	rx_callback = callback;
 	rx_callback_param = userData;
 	Serial.println("CAN: notifications activated");
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_ActivateNotification(&_hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER0));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_ActivateNotification(&instance->fdcan_handle, FDCAN_IT_RX_FIFO0_NEW_MESSAGE | FDCAN_IT_TX_COMPLETE, FDCAN_TX_BUFFER0));
 }
 
 
-CCStatus ComplexCan_STM32G4xx::DeactivateNotification()
+CCStatus ComplexCan_STM32::DeactivateNotification()
 {
 	rx_callback = nullptr;
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_DeactivateNotification(&_hfdcan1, FDCAN_IT_RX_FIFO0_NEW_MESSAGE));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_DeactivateNotification(&instance->fdcan_handle, FDCAN_IT_RX_FIFO0_NEW_MESSAGE));
 }
 
 
-CCStatus ComplexCan_STM32G4xx::Start(void)
+CCStatus ComplexCan_STM32::Start(void)
 {
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_Start(&_hfdcan1));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_Start(&instance->fdcan_handle));
 }
 
 
-CCStatus ComplexCan_STM32G4xx::Stop(void)
+CCStatus ComplexCan_STM32::Stop(void)
 {
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_Stop(&_hfdcan1));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_Stop(&instance->fdcan_handle));
 }
 
 
 // Specify what to do with non-matching frames.
-CCStatus ComplexCan_STM32G4xx::ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt)
+CCStatus ComplexCan_STM32::ConfigGlobalFilter(uint32_t nonMatchingStd, uint32_t nonMatchingExt, uint32_t rejectRemoteStd, uint32_t rejectRemoteExt)
 {
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_ConfigGlobalFilter(&_hfdcan1, nonMatchingStd, nonMatchingExt, rejectRemoteStd, rejectRemoteExt));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_ConfigGlobalFilter(&instance->fdcan_handle, nonMatchingStd, nonMatchingExt, rejectRemoteStd, rejectRemoteExt));
 }
 
 
 // Modify the global filter to reject everything which is not matching the other filters and acceopt all remote frames. 
-CCStatus ComplexCan_STM32G4xx::ConfigGlobalFilter()
+CCStatus ComplexCan_STM32::ConfigGlobalFilter()
 {
 	return ConfigGlobalFilter(FDCAN_REJECT, FDCAN_REJECT, FDCAN_FILTER_REMOTE, FDCAN_FILTER_REMOTE);
 }
 
 
-CCStatus ComplexCan_STM32G4xx::ConfigFilter(FilterDefinition *SCFilter)
+CCStatus ComplexCan_STM32::ConfigFilter(FilterDefinition *SCFilter)
 {
 	// Convert the filter definition
 	FDCAN_FilterTypeDef  STMFilter;
 
 	CCStatus rc = SC2STM32_Filter(SCFilter, &STMFilter);
 	if (CAN_OK!=rc) return rc;
-	return HALSTATUS2CANSTATUS(HAL_FDCAN_ConfigFilter(&_hfdcan1, &STMFilter));
+	return HALSTATUS2CANSTATUS(HAL_FDCAN_ConfigFilter(&instance->fdcan_handle, &STMFilter));
 }
 
-bool ComplexCan_STM32G4xx::SendNextMessageFromQueue()
+bool ComplexCan_STM32::SendNextMessageFromQueue()
 {
 	if (TxQueue.get_num_elements())
 	{
@@ -342,7 +441,7 @@ bool ComplexCan_STM32G4xx::SendNextMessageFromQueue()
 // and to not send any data bytes as payload. NumBytes/DLC must be set to the number of bytes expected in the
 // return payload. The answer to the RTR frame will be received and handled like any other CAN message.
 // So, in principle, no data array is required, but unfortunately the STM32 HAL routines expect it...
-CCStatus ComplexCan_STM32G4xx::KickMessage(const CanTxMessage *message)
+CCStatus ComplexCan_STM32::KickMessage(const CanTxMessage *message)
 {
 	
 	FDCAN_TxHeaderTypeDef TxHeader;
@@ -371,14 +470,12 @@ CCStatus ComplexCan_STM32G4xx::KickMessage(const CanTxMessage *message)
 	{
 		data_ptr = reinterpret_cast<const uint8_t*>(&message[1]);
 	}
-	HAL_StatusTypeDef status = HAL_FDCAN_AddMessageToTxFifoQ(&_hfdcan1, &TxHeader, data_ptr);
+	HAL_StatusTypeDef status = HAL_FDCAN_AddMessageToTxFifoQ(&instance->fdcan_handle, &TxHeader, data_ptr);
 	if (status != HAL_OK)
 	{
-		Serial.printf("ComplexCAN: Failed to send %d bytes, error %d\n", message->Size, status);
+		Serial.printf("ComplexCAN: Failed to send %d bytes, error %d:%d\n", message->Size, status, instance->fdcan_handle.ErrorCode);
 	}
 	return HALSTATUS2CANSTATUS(status);
 }
-
-FDCAN_HandleTypeDef ComplexCan_STM32G4xx::_hfdcan1 = {};
 
 #endif

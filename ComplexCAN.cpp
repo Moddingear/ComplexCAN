@@ -9,10 +9,6 @@
 #include <Arduino.h>
 #include <ComplexCAN.h>
 
-uint8_t ComplexCan::rx_overrun = 0;
-SafeCircularBuffer<CanRxMessage, 1024, 64, true> ComplexCan::RxQueue;
-SafeCircularBuffer<CanTxMessage, 1024, 64, false> ComplexCan::TxQueue;
-
 #if defined(COMPLEXCAN_NO_PRINTF)
 	#define PRINTF //
 #elif defined(ARDUINO_ARCH_STM32)
@@ -37,13 +33,6 @@ CCStatus ComplexCan::DeactivateNotification()
 
 bool ComplexCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
-	// Skip command if sender ID is disabled.
-	// if (SendIDFilterFunc && !SendIDFilterFunc(CanID)) return true; 
-
-	// Skip sending if disabled.
-	if (DoNotSend) return true;
-
-
 	if (TxQueue.get_free()<sizeof(CanTxMessage)+NumBytes)
 	{
 		PRINTF("CAN Error: Tx buffer overrun\n");
@@ -60,7 +49,7 @@ bool ComplexCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t Ca
 	Msg->FDCanFrame = UseFDCAN || (NumBytes > 8);
 	memcpy(reinterpret_cast<uint8_t*>(&Msg[1]), pData, NumBytes);
 	TxQueue.write(NumBytes);
-	//Serial.printf("TX queue: consuming %d bytes\n", NumBytes+sizeof(CanTxMessage));
+	//PRINTF("TX queue: consuming %d bytes\n", NumBytes+sizeof(CanTxMessage));
 	
 	// Kick sending of messages from buffer.
 	
@@ -75,13 +64,6 @@ bool ComplexCan::SendMessage(const uint8_t* pData, uint8_t NumBytes, uint32_t Ca
 // return payload. The answer to the RTR frame will be received and handled like any other CAN message.
 bool ComplexCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, bool UseFDCAN)
 {
-	// Skip command if sender ID is disabled.
-	// if (SendIDFilterFunc && !SendIDFilterFunc(CanID)) return true; 
-
-	// Skip sending if disabled.
-	if (DoNotSend) return true;
-
-
 	if (TxQueue.get_free()<sizeof(CanTxMessage))
 	{
 		PRINTF("CAN Error: Tx buffer overrun");
@@ -97,7 +79,7 @@ bool ComplexCan::RequestMessage(uint8_t NumBytes, uint32_t CanID, bool UseEFF, b
 	Msg->RemoteFrame = true;
 	Msg->FDCanFrame = UseFDCAN;
 	TxQueue.write(0);
-	//Serial.printf("TX queue: consuming %d bytes\n", 0+sizeof(CanTxMessage));
+	//PRINTF("TX queue: consuming %d bytes\n", 0+sizeof(CanTxMessage));
 	
 	// Kick sending of messages from buffer.
 	TriggerSending();

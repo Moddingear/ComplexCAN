@@ -9,10 +9,10 @@
 #include <esp_twai_onchip.h>
 #include <ComplexCAN_ESP32.h>
 
-
 static IRAM_ATTR bool twai_rx_callback(twai_node_handle_t handle, const twai_rx_done_event_data_t *edata, void *user_ctx)
 {
-	CanRxMessage *scanmsg = ComplexCan::RxQueue.reserve();
+	ComplexCan_ESP32 *complexcan_instance = reinterpret_cast<ComplexCan_ESP32*>(user_ctx);
+	CanRxMessage *scanmsg = complexcan_instance->RxQueue.reserve();
     if (!scanmsg) {
         ets_printf("CAN RX Ringbuff full, dropping frame\n");
         return false;
@@ -32,7 +32,7 @@ static IRAM_ATTR bool twai_rx_callback(twai_node_handle_t handle, const twai_rx_
 	scanmsg->SCHeader.RxTimestamp = message.header.timestamp;
 	scanmsg->Error = message.header.esi;
 	//ets_printf("CAN received message from %d length %d\n", message.header.id, message.header.dlc);
-	return ComplexCan::RxQueue.write(scanmsg->SCHeader.DataLength);
+	return complexcan_instance->RxQueue.write(scanmsg->SCHeader.DataLength);
 }
 
 static IRAM_ATTR bool twai_tx_callback(twai_node_handle_t handle, const twai_tx_done_event_data_t *edata, void *user_ctx)
@@ -56,7 +56,7 @@ static bool IRAM_ATTR twai_on_state_change_callback(twai_node_handle_t handle, c
 	return false;
 }
 
-ComplexCan_ESP32::ComplexCan_ESP32(uint32_t _TxPin, uint32_t _RxPin) : ComplexCan(_TxPin, _RxPin)
+ComplexCan_ESP32::ComplexCan_ESP32(uint32_t _TxPin, uint32_t _RxPin) : ComplexCan()
 {
     RxPin = (gpio_num_t)_RxPin;
     TxPin = (gpio_num_t)_TxPin;
@@ -72,7 +72,7 @@ CCStatus ComplexCan_ESP32::Stop(void)
 	return twai_node_disable(can_handle) == ESP_OK ? CAN_OK : CAN_ERROR;
 }
 
-CCStatus ComplexCan_ESP32::Init(uint32_t arbitration_speed, uint32_t data_speed, CanIDFilter IDFilterFunc)
+CCStatus ComplexCan_ESP32::Init(uint32_t arbitration_speed, uint32_t data_speed)
 {
 	twai_onchip_node_config_t node_config = {
 		.io_cfg = {
@@ -90,7 +90,7 @@ CCStatus ComplexCan_ESP32::Init(uint32_t arbitration_speed, uint32_t data_speed,
 		},
 		#endif
 		.fail_retry_cnt = 3,
-		.tx_queue_depth = 32,
+		.tx_queue_depth = ComplexCAN_TXbuf_Size,
 	};
 	ESP_ERROR_CHECK(twai_new_node_onchip(&node_config, &can_handle));
 
@@ -100,7 +100,7 @@ CCStatus ComplexCan_ESP32::Init(uint32_t arbitration_speed, uint32_t data_speed,
 		.on_state_change = twai_on_state_change_callback,
 		.on_error = twai_on_error_callback,
 	};
-	ESP_ERROR_CHECK(twai_node_register_event_callbacks(can_handle, &callbacks, NULL));
+	ESP_ERROR_CHECK(twai_node_register_event_callbacks(can_handle, &callbacks, this));
 	return CAN_OK;
 }
 

@@ -86,10 +86,9 @@ public:
 template <class T, size_t memory_size, size_t max_data_size, bool rx>
 class SafeCircularBuffer
 {
-    RingbufHandle_t buffer_handle;
+    RingbufHandle_t buffer_handle = nullptr;
     std::array<uint8_t, (sizeof(T) + max_data_size) * rx> write_data;
-    T* read_item_pointer;
-    
+    T* read_item_pointer = nullptr;
     
 public:
     SafeCircularBuffer()
@@ -129,7 +128,7 @@ public:
         
     }
 
-    T* IRAM_ATTR peek()
+    T* peek()
     {
         if (rx)
         {
@@ -144,7 +143,7 @@ public:
         
     }
 
-    bool IRAM_ATTR read(size_t data_size)
+    bool read(size_t data_size)
     {
         if (rx)
         {
