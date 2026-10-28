@@ -37,6 +37,7 @@ public:
     {
         if (writeptr+get_max_slots() > memory_size / sizeof(unsigned int))
         {
+            free_mem -= (memory_size / sizeof(unsigned int)) - writeptr;
             writeptr = 0;
         }
         size_t elem_size = get_num_slots(data_size);
@@ -59,6 +60,7 @@ public:
         free_mem += elem_size;
         if (readptr + get_max_slots() > memory_size / sizeof(unsigned int))
         {
+            free_mem += (memory_size / sizeof(unsigned int)) - readptr;
             readptr = 0;
         }
         num_elements--;
@@ -93,7 +95,7 @@ class SafeCircularBuffer
 public:
     SafeCircularBuffer()
     {
-        if(rx)
+        if constexpr (rx)
         {
             buffer_handle = xRingbufferCreateNoSplit(sizeof(T) + max_data_size, memory_size/(sizeof(T) + max_data_size));
             read_item_pointer = nullptr;
@@ -102,7 +104,7 @@ public:
 
     T* IRAM_ATTR reserve()
     {
-        if (rx)
+        if constexpr (rx)
         {
             return reinterpret_cast<T*>(write_data.data());
         }
@@ -115,7 +117,7 @@ public:
 
     bool IRAM_ATTR write(size_t data_size)
     {
-        if (rx)
+        if constexpr (rx)
         {
             BaseType_t awoken = pdFALSE;
             xRingbufferSendFromISR(buffer_handle, write_data.data(), sizeof(T)+ data_size, &awoken);
@@ -130,7 +132,7 @@ public:
 
     T* peek()
     {
-        if (rx)
+        if constexpr (rx)
         {
             size_t item_size;
             read_item_pointer = reinterpret_cast<T*>(xRingbufferReceive(buffer_handle, &item_size, 0));
@@ -145,7 +147,7 @@ public:
 
     bool read(size_t data_size)
     {
-        if (rx)
+        if constexpr (rx)
         {
             vRingbufferReturnItem(buffer_handle, read_item_pointer);
             return false;
@@ -159,7 +161,7 @@ public:
 
     uint8_t get_num_elements() 
     { 
-        if (rx)
+        if constexpr (rx)
         {
             UBaseType_t waiting;
             vRingbufferGetInfo(buffer_handle, nullptr, nullptr, nullptr, nullptr, &waiting); 
@@ -175,7 +177,7 @@ public:
 
     uint16_t get_free() 
     { 
-        if (rx)
+        if constexpr (rx)
         {
             return xRingbufferGetCurFreeSize(buffer_handle);
         }

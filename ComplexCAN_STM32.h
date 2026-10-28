@@ -17,11 +17,8 @@ public:
 	 * 
 	 * @param PinTx Pin connected to the RX of the can transceiver
 	 * @param PinRx Pin connected to the TX of the can transceiver
-	 * @param instance FDCAN1 to FDCAN3
-	 * @param tx_af GPIO_AF9_FDCAN1 (for G431) or something similar, see datasheet/alternate function for the correct value
-	 * @param rx_af GPIO_AF9_FDCAN1 (for G431) or something similar, see datasheet/alternate function for the correct value
 	 */
-	ComplexCan_STM32(PinName PinTx, PinName PinRx, FDCAN_GlobalTypeDef* instance, uint8_t tx_af, uint8_t rx_af);
+	ComplexCan_STM32(PinName PinTx, PinName PinRx);
 
 	//*******************************************************
 	//*** Implementation of pure virtual methods ************
@@ -61,7 +58,6 @@ public:
 	//*** Other methods ************
 
 	PinName RXPin, TXPin;
-	uint8_t rx_af, tx_af;
 
 	struct ComplexCANInstance
 	{

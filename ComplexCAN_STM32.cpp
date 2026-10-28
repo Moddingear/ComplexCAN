@@ -111,7 +111,7 @@ extern "C" void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 		return;
 	}
 	ComplexCan_STM32 *complexcan_instance = get_instance(hfdcan)->instance_pointer;
-
+	
 	//Serial.printf("MSPInit of %p\n", complexcan_instance);
 
 	RCC_PeriphCLKInitTypeDef periphClkInit = { };
@@ -129,26 +129,8 @@ extern "C" void HAL_FDCAN_MspInit(FDCAN_HandleTypeDef *hfdcan)
 	
 	// Peripheral clock enable
 	__HAL_RCC_FDCAN_CLK_ENABLE();
-	
-	// FDCAN1 GPIO Configuration
-	// PA11 ------> FDCAN1_RX
-	GPIO_InitTypeDef GPIO_InitStruct = { 0 };
-	
-	
-	GPIO_InitStruct.Pin = STM_LL_GPIO_PIN(complexcan_instance->RXPin);
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStruct.Alternate = complexcan_instance->rx_af;
-	HAL_GPIO_Init(get_GPIO_Port(STM_PORT(complexcan_instance->RXPin)), &GPIO_InitStruct);
-
-	// PB9/PA12 ------> FDCAN1_TX 
-	GPIO_InitStruct.Pin = STM_LL_GPIO_PIN(complexcan_instance->TXPin);
-	GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-	GPIO_InitStruct.Pull = GPIO_NOPULL;
-	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
-	GPIO_InitStruct.Alternate = complexcan_instance->tx_af;
-	HAL_GPIO_Init(get_GPIO_Port(STM_PORT(complexcan_instance->TXPin)), &GPIO_InitStruct);
+	pinmap_pinout(complexcan_instance->RXPin, PinMap_CAN_RD);
+	pinmap_pinout(complexcan_instance->TXPin, PinMap_CAN_TD);
 
 
 	// FDCAN1 interrupt Init
@@ -280,26 +262,35 @@ void ComplexCan_STM32::OnReceivedMessage()
 }
 
 
-ComplexCan_STM32::ComplexCan_STM32(PinName PinTx, PinName PinRx, FDCAN_GlobalTypeDef* instance, uint8_t in_tx_af, uint8_t in_rx_af)
-	: ComplexCan(), RXPin(PinRx), TXPin(PinTx), rx_af(in_rx_af), tx_af(in_tx_af)
+ComplexCan_STM32::ComplexCan_STM32(PinName PinTx, PinName PinRx)
+	: ComplexCan(), RXPin(PinRx), TXPin(PinTx)
 {
-	switch (reinterpret_cast<uintptr_t>(instance))
+	FDCAN_GlobalTypeDef *instance_rx = reinterpret_cast<FDCAN_GlobalTypeDef*>(pinmap_find_peripheral(RXPin, PinMap_CAN_RD));
+	FDCAN_GlobalTypeDef *instance_tx = reinterpret_cast<FDCAN_GlobalTypeDef*>(pinmap_find_peripheral(TXPin, PinMap_CAN_TD));
+	if (instance_rx != instance_tx)
+	{
+		Serial.printf("ComplexCAN: CAN instances do not match! %p != %p\n", instance_rx, instance_tx);
+		return;
+	}
+	
+
+	switch (reinterpret_cast<uintptr_t>(instance_rx))
 	{
 	#if defined(FDCAN1)
 	case FDCAN1_BASE:
-		this->instance = &fdcan1_inst;
+		instance = &fdcan1_inst;
 		fdcan1_inst.fdcan_handle.Instance = FDCAN1;
 		break;
 	#endif
 	#if defined(FDCAN2)
 	case FDCAN2_BASE:
-		this->instance = &fdcan2_inst;
+		instance = &fdcan2_inst;
 		fdcan1_inst.fdcan_handle.Instance = FDCAN2;
 		break;
 	#endif
 	#if defined(FDCAN3)
 	case FDCAN3_BASE:
-		this->instance = &fdcan3_inst;
+		instance = &fdcan3_inst;
 		fdcan1_inst.fdcan_handle.Instance = FDCAN3;
 		break;
 	#endif
@@ -308,11 +299,11 @@ ComplexCan_STM32::ComplexCan_STM32(PinName PinTx, PinName PinRx, FDCAN_GlobalTyp
 		Serial.println("ComplexCAN: CAN instance not supported!");
 		return;
 	}
-	if (this->instance->instance_pointer != NULL)
+	if (instance->instance_pointer != NULL)
 	{
 		Serial.println("ComplexCAN: CAN instance already used!");
 	}
-	this->instance->instance_pointer = this;
+	instance->instance_pointer = this;
 }
 
 CCStatus ComplexCan_STM32::Init(uint32_t arbitration_speed, uint32_t data_speed)
